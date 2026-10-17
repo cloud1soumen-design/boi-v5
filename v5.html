@@ -159,6 +159,41 @@ async function ocrPage(page,i){
  };
  const r=ocrQ.then(job,job);ocrQ=r.catch(()=>{});return r;
 }
+
+// ===== v5.5: লক-নিয়ম (AI-ই চূড়ান্ত / সব লক) + ছবি দেখানো =====
+let LKM=ls.get('lkm')||'ai';
+const aiFinal=()=>LKM==='ai';
+document.head.appendChild(Object.assign(document.createElement('style'),{textContent:'.bkimg{display:block;max-width:100%;height:auto;margin:12px auto;border-radius:4px}.pgimg{margin:6px 0 14px}.pgimg canvas{width:100%;height:auto;border:1px solid #bbb;border-radius:4px;display:block}'}));
+function viewImg(el){
+ const ov=document.createElement('div');
+ ov.style.cssText='position:fixed;inset:0;background:#000;z-index:99999;overflow:auto;-webkit-overflow-scrolling:touch';
+ let c;
+ if(el.tagName==='CANVAS'){c=document.createElement('canvas');c.width=el.width;c.height=el.height;c.getContext('2d').drawImage(el,0,0)}
+ else c=el.cloneNode();
+ c.style.cssText='width:200%;max-width:none;height:auto;display:block';
+ ov.append(c);ov.onclick=()=>ov.remove();document.body.append(ov);
+}
+async function addImages(p0){
+ if(!book)return;
+ view.querySelectorAll('#pgimg,.bkimg').forEach(e=>e.remove());
+ try{
+  if(book.render&&(RS.pgimg||'auto')!=='off'){
+   let want=RS.pgimg==='always';
+   if(!want&&book.hasImg)want=await book.hasImg(p0);
+   if(want&&pos===p0){
+    const h=document.createElement('div');h.id='pgimg';h.className='pgimg';h.textContent='⏳ পাতার ছবি আনা হচ্ছে…';view.prepend(h);
+    const cv=await book.render(p0,Math.min(view.clientWidth||360,900));
+    if(pos!==p0){h.remove();return}
+    h.textContent='';h.append(cv);h.onclick=()=>viewImg(cv);
+   }
+  }
+  if(book.imgs&&RS.bkimg!==false){
+   const list=await book.imgs(p0);if(pos!==p0)return;
+   const bl=[...view.querySelectorAll('.blk')];
+   list.forEach(it=>{const im=document.createElement('img');im.className='bkimg';im.src=it.src;im.onclick=()=>viewImg(im);const ref=bl[it.at];if(ref)view.insertBefore(im,ref);else view.append(im)});
+  }
+ }catch(e){const h=$('#pgimg');if(h&&!h.querySelector('canvas'))h.remove()}
+}
 async function openPdf(buf){
  pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([document.getElementById('pdfw').textContent],{type:'text/javascript'}));
  const d=await pdfjsLib.getDocument({data:buf}).promise;
@@ -181,6 +216,14 @@ async function openPdf(buf){
    catch(e){setSt('⚠ OCR হয়নি: '+(e.message||e))}
   }
   return out;
+ },async render(i,w){
+  const page=await d.getPage(i+1),v1=page.getViewport({scale:1}),sc=Math.min(3,(w/v1.width)*(window.devicePixelRatio||1)),vp=page.getViewport({scale:sc});
+  const cv=document.createElement('canvas');cv.width=Math.ceil(vp.width);cv.height=Math.ceil(vp.height);
+  await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;return cv;
+ },async hasImg(i){
+  const page=await d.getPage(i+1),ol=await page.getOperatorList(),O=pdfjsLib.OPS;
+  const ids=[O.paintImageXObject,O.paintJpegXObject,O.paintInlineImageXObject,O.paintImageXObjectRepeat,O.paintInlineImageXObjectGroup].filter(x=>x!==undefined);
+  return ol.fnArray.some(f=>ids.includes(f));
  }};
 }
 async function openEpubRaw(buf){
@@ -192,7 +235,17 @@ async function openEpubRaw(buf){
  const opf=X(await rd(op));const man={};
  opf.querySelectorAll('manifest > item').forEach(i=>man[i.getAttribute('id')]=i.getAttribute('href'));
  const sp=[...opf.querySelectorAll('spine > itemref')].map(r=>man[r.getAttribute('idref')]).filter(Boolean);
- return{n:sp.length,async toc(){
+ const imgCache=new Map();
+ const normP=pth=>{const o=[];pth.split('/').forEach(sg=>{if(sg==='..')o.pop();else if(sg&&sg!=='.')o.push(sg)});return o.join('/')};
+ return{n:sp.length,async loadImg(it){
+  const s=it.src;if(/^(data:|https?:)/i.test(s))return s;
+  const pth=normP(/^\//.test(s)?s.slice(1):(it.base+decodeURIComponent(s.split('#')[0].split('?')[0])));
+  if(imgCache.has(pth))return imgCache.get(pth);
+  const f=z.file(pth)||z.file(decodeURIComponent(pth));if(!f)throw new Error('img');
+  const ab=await f.async('arraybuffer'),ext=(pth.split('.').pop()||'').toLowerCase();
+  const mt={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',svg:'image/svg+xml',webp:'image/webp',bmp:'image/bmp'}[ext]||'image/jpeg';
+  const u=URL.createObjectURL(new Blob([ab],{type:mt}));imgCache.set(pth,u);return u;
+ },async toc(){
   const items=[...opf.querySelectorAll('manifest > item')];
   const navI=items.find(x=>(x.getAttribute('properties')||'').split(' ').includes('nav'));
   const ncxI=items.find(x=>x.getAttribute('media-type')==='application/x-dtbncx+xml');
@@ -211,14 +264,27 @@ async function openEpubRaw(buf){
    if(t){const doc=X(t);doc.querySelectorAll('navPoint').forEach(np=>{let l=0,e=np;while((e=e.parentElement)&&e.tagName==='navPoint')l++;const lab=np.querySelector('navLabel > text'),c=np.querySelector('content');if(lab&&c)out.push({t:lab.textContent.trim(),i:idxOf(norm(nd+(c.getAttribute('src')||''))),l})})}
   }
   return out;
- },async get(i){
+ },async parse(i){
   const h=decodeURIComponent(sp[i]);
-  const t=(await rd(dir+h))||(await rd(h))||'';
-  const b=new DOMParser().parseFromString(t,'text/html').body;
+  const t1=await rd(dir+h),hp=t1!==null?dir+h:h,t=(t1!==null?t1:await rd(h))||'';
+  const base=hp.replace(/[^/]*$/,'');
+  const doc=new DOMParser().parseFromString(t,'text/html'),b=doc.body,imgs0=[];
+  b.querySelectorAll('img,image').forEach(im=>{
+   const src=im.getAttribute('src')||im.getAttribute('xlink:href')||im.getAttribute('href')||'';
+   if(!src){im.remove();return}
+   const mk=' ⟦IMG:'+(imgs0.push(src)-1)+'⟧ ';
+   if(im.closest('p,li,h1,h2,h3,h4,h5,h6'))im.replaceWith(doc.createTextNode(mk));
+   else{const p=doc.createElement('p');p.textContent=mk;im.replaceWith(p)}
+  });
   let a=[...b.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li')].map(e=>e.textContent.replace(/\s+/g,' ').trim()).filter(Boolean);
   if(!a.length)a=b.textContent.split(/\n+/).map(s=>s.trim()).filter(Boolean);
-  return a;
- }};
+  const paras=[],imgs=[];
+  a.forEach(tx=>{
+   tx=tx.replace(/⟦IMG:(\d+)⟧/g,(m,n)=>{imgs.push({i:paras.length,src:imgs0[+n],base});return ''}).replace(/\s+/g,' ').trim();
+   if(tx)paras.push(tx);
+  });
+  return{paras,imgs};
+ },async get(i){return (await this.parse(i)).paras}};
 }
 
 // ===== v4.5: MOBI সমর্থন + EPUB/MOBI পাতা-ভিত্তিক (PDF-এর মতো) =====
@@ -230,29 +296,34 @@ function packPieces(p,max){
  if(cur.trim())out.push(cur.trim());return out;
 }
 function pagedBook(chs,mkToc){
- const pages=[],startPage=[],headPages=[];
+ const pages=[],startPage=[],headPages=[],pageImgs={};
  let cur=[],n=0;
  const flush=()=>{if(cur.length){pages.push(cur);cur=[];n=0}};
+ const addImg=im=>{const pi=pages.length;(pageImgs[pi]=pageImgs[pi]||[]).push({at:cur.length,load:im.load})};
  chs.forEach(ch=>{
   startPage.push(pages.length);
   const hmap={};(ch.heads||[]).forEach(h=>{hmap[h.i]=h});
+  const imap={};(ch.imgs||[]).forEach(im=>{(imap[im.i]=imap[im.i]||[]).push(im)});
+  if(!ch.paras.length&&(ch.imgs||[]).length){flush();ch.imgs.forEach(addImg);pages.push([]);cur=[];n=0;return}
   ch.paras.forEach((p,pi)=>{
    packPieces(p,PAGE_CH).forEach((pc,k)=>{
     if(n&&n+pc.length>PAGE_CH)flush();
-    if(k===0&&hmap[pi])headPages.push({t:hmap[pi].t,i:pages.length,l:hmap[pi].l});
+    if(k===0){if(hmap[pi])headPages.push({t:hmap[pi].t,i:pages.length,l:hmap[pi].l});(imap[pi]||[]).forEach(addImg)}
     cur.push(pc);n+=pc.length;
    });
   });
+  Object.keys(imap).filter(k=>+k>=ch.paras.length).forEach(k=>imap[k].forEach(addImg));
   if(n>=800)flush();
  });
  flush();
  if(!pages.length)pages.push([]);
- return{n:pages.length,async toc(){return mkToc?await mkToc(startPage,headPages):headPages},async get(i){return pages[i]||[]}};
+ return{n:pages.length,async toc(){return mkToc?await mkToc(startPage,headPages):headPages},async get(i){return pages[i]||[]},
+  async imgs(i){const out=[];for(const it of (pageImgs[i]||[])){try{out.push({at:it.at,src:await it.load()})}catch(e){}}return out}};
 }
 async function openEpub(buf){
  const raw=await openEpubRaw(buf);
  const chs=[];
- for(let i=0;i<raw.n;i++){let a=[];try{a=await raw.get(i)}catch(e){}chs.push({paras:a,heads:[]})}
+ for(let i=0;i<raw.n;i++){let r={paras:[],imgs:[]};try{r=await raw.parse(i)}catch(e){}chs.push({paras:r.paras,heads:[],imgs:r.imgs.map(x=>({i:x.i,load:()=>raw.loadImg(x)}))})}
  return pagedBook(chs,async(sp,hp)=>{
   let t0=[];try{t0=await raw.toc()}catch(e){}
   if(!t0.length)return hp;
@@ -273,18 +344,25 @@ function palmDecomp(s){
 }
 function htmlToChapter(html,brSplit){
  const doc=new DOMParser().parseFromString(html,'text/html');
- doc.querySelectorAll('script,style,head,svg,img').forEach(e=>e.remove());
+ doc.querySelectorAll('script,style,head,svg').forEach(e=>e.remove());
+ const imgs0=[];
+ doc.querySelectorAll('img').forEach(im=>{
+  const rec=+im.getAttribute('recindex');if(!rec){im.remove();return}
+  const mk=' ⟦IMG:'+(imgs0.push(rec)-1)+'⟧ ';
+  if(im.closest('p,li,h1,h2,h3,h4,h5,h6'))im.replaceWith(doc.createTextNode(mk));
+  else{const p=doc.createElement('p');p.textContent=mk;im.replaceWith(p)}
+ });
  doc.querySelectorAll('br').forEach(b=>b.replaceWith(brSplit?'\n':' '));
  const B='h1,h2,h3,h4,h5,h6,p,li,blockquote,div,pre,dd,dt,td';
- const paras=[],heads=[];
+ const paras=[],heads=[],imgs=[];
  const add=(el,txt)=>{
   const parts=txt.split(/\n+/).map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
   const m=el&&/^H([1-3])$/.exec(el.tagName);
-  parts.forEach((s,k)=>{if(m&&k===0)heads.push({i:paras.length,l:+m[1]-1,t:s});paras.push(s)});
+  parts.forEach((s,k)=>{s=s.replace(/⟦IMG:(\d+)⟧/g,(mm,nn)=>{imgs.push({i:paras.length,rec:imgs0[+nn]});return ''}).replace(/\s+/g,' ').trim();if(!s)return;if(m&&k===0)heads.push({i:paras.length,l:+m[1]-1,t:s});paras.push(s)});
  };
  [...doc.body.querySelectorAll(B)].filter(e=>!e.querySelector(B)).forEach(e=>add(e,e.textContent));
  if(!paras.length)add(null,doc.body.textContent||'');
- return{paras,heads};
+ return{paras,heads,imgs};
 }
 async function openMobi(buf){
  const u=new Uint8Array(buf),dv=new DataView(buf);
@@ -315,6 +393,18 @@ async function openMobi(buf){
  const html=new TextDecoder(tenc===65001?'utf-8':'windows-1252').decode(all);
  const chs=html.split(/<mbp:pagebreak\s*\/?>/i).map(h=>htmlToChapter(h,true)).filter(c=>c.paras.length);
  if(!chs.length)throw new Error('EMPTY');
+ const fi=(String.fromCharCode(u[r0+16],u[r0+17],u[r0+18],u[r0+19])==='MOBI'&&dv.getUint32(r0+20)>=0x70)?dv.getUint32(r0+0x6C):0;
+ const iCache=new Map();
+ const mobiImg=async idx=>{
+  if(iCache.has(idx))return iCache.get(idx);
+  if(idx<1||idx>=nrec)throw new Error('img');
+  const d=u.subarray(off[idx],off[idx+1]);
+  let mt='';
+  if(d[0]===0xFF&&d[1]===0xD8)mt='image/jpeg';else if(d[0]===0x89&&d[1]===0x50)mt='image/png';else if(d[0]===0x47&&d[1]===0x49)mt='image/gif';else if(d[0]===0x42&&d[1]===0x4D)mt='image/bmp';
+  if(!mt)throw new Error('img');
+  const url=URL.createObjectURL(new Blob([d],{type:mt}));iCache.set(idx,url);return url;
+ };
+ chs.forEach(c=>{c.imgs=(c.imgs||[]).map(x=>({i:x.i,load:()=>mobiImg(fi+x.rec-1)}))});
  return pagedBook(chs,null);
 }
 
@@ -357,12 +447,12 @@ $('#bLib').onclick=showLib;
 async function show(){
  view.innerHTML='';sheet.style.display='none';
  try{paras=await book.get(pos)}catch(e){paras=[]}
- if(!paras.length){view.innerHTML='<div class="hello">এই পাতায় পড়ার মতো লেখা নেই (স্ক্যান করা ছবির PDF-এ লেখা বের হয় না)।</div>'}
+ if(!paras.length){view.innerHTML='<div class="hello">এই পাতায় পড়ার মতো লেখা নেই (ছবি থাকলে নিচে দেখানো হয়; স্ক্যান করা PDF-এ OCR চালু রাখুন)।</div>'}
  paras.forEach(t=>{const b=document.createElement('div');b.className='blk';const o=document.createElement('p');o.className='o';o.textContent=t;const d=document.createElement('p');d.className='tr';b.append(o,d);view.append(b)});
  vc();if(auto)translateAll();loadNotes();loadPageCard();
  view.style.fontSize=fs+'px';
  $('#pg').value=pos+1;ls.set(key,pos);scrollTo(0,0);
- markBM();flashFind();scheduleHL();
+ markBM();flashFind();scheduleHL();addImages(pos);
 }
 const go=n=>{if(!book)return;pos=Math.min(Math.max(n,0),total-1);show()};
 $('#prev').onclick=()=>go(pos-1);$('#next').onclick=()=>go(pos+1);
@@ -878,11 +968,17 @@ async function llm(p,t,prio){
   throw lastE||Object.assign(new Error('rl'),{status:429,rl:true});
  }finally{if(prio===0)fgPend--}
 }
-function termTable(){
- const keep=[],map=[];
- Object.entries(bookCtx.terms).forEach(([en,b])=>{b==='KEEP_EN'?keep.push(en):map.push(en+' = '+b)});
- gl.filter(g=>!g.bk||g.bk===key).forEach(g=>g.bn?map.push(g.en+' = '+g.bn):keep.push(g.en));
- return{keep:[...new Set(keep)].slice(0,150),map:[...new Set(map)].slice(0,150)};
+function termTable(list){
+ const txt=(list||[]).join(' ').toLowerCase();
+ const has=en=>!list||txt.includes(String(en).toLowerCase());
+ const keep=[],map=[],sug=[];
+ Object.entries(bookCtx.terms).forEach(([en,b])=>{if(!has(en))return;b==='KEEP_EN'?keep.push(en):map.push(en+' = '+b)});
+ gl.filter(g=>!g.bk||g.bk===key).forEach(g=>{
+  if(!has(g.en))return;
+  const learned=/AI-র শেখা/.test(g.src||'');
+  if(g.bn)(learned?sug:map).push(g.en+' = '+g.bn);else keep.push(g.en);
+ });
+ return{keep:[...new Set(keep)].slice(0,150),map:[...new Set(map)].slice(0,150),sug:[...new Set(sug)].slice(0,60)};
 }
 function srcHint(list){
  const j=list.join(' ');let s='';
@@ -890,8 +986,9 @@ function srcHint(list){
  if(ocrUsed)s+='SOURCE QUALITY: this text comes from OCR of a scanned book, so it may contain broken words, wrong characters, missing pieces or stray symbols. Use the book\'s subject and the surrounding context to understand what the author most likely wrote. Where the OCR text is unclear, garbled or incomplete, reconstruct the most probable intended words or sentence and write that reconstructed Bangla inside square brackets [ ] so the reader can see it is a reconstruction. Silently fix trivial OCR slips without brackets. Never invent new ideas and never drop content that is readable.\n';
  return s?s+'\n':'';
 }
+let WMAP=+(ls.get('wmap')||8),RECUT=ls.get('recut')!=='0',strictNext=false,fixQ=Promise.resolve();
 function gprompt(list){
- const T=termTable();
+ const T=termTable(list);
  return 'You are an expert human translator producing Bangla (Bengali) for a serious reader who is STUDYING this book and wants the author\'s exact ideas.\n'
  +'BOOK: '+(key?key.replace(/^pos:/,'').replace(/\d+(#pg)?$/,''):'unknown')+(gtp?'\nSUBJECT (from reader): '+gtp:'')+(bookCtx.profile?'\nBOOK PROFILE (your earlier understanding, keep following it): '+bookCtx.profile:'')+(cust.trim()?'\nREADER\'S CUSTOM INSTRUCTIONS (highest priority; follow them strictly, they override the defaults below where they differ):\n'+cust.trim():'')+'\n\n'
  +srcHint(list)+'PRIORITIES:\n'
@@ -902,14 +999,16 @@ function gprompt(list){
   ?'4. THE READER DOES NOT KNOW ENGLISH AT ALL, so never leave a bare English word. For every technical/subject term: use a good Bangla word when one exists with the exact meaning; otherwise write the term in Bangla script (transliteration), e.g. অর্ডার ব্লক, and on its FIRST occurrence in this input add the original English in brackets, e.g. তরলতা (liquidity), অর্ডার ব্লক (order block), এপিআই (API); where useful add a very short Bangla explanation once. Use the same Bangla form every time. Names of people/places/brands: Bangla script, English in brackets once.\n'
   :'4. Technical/subject terms: be consistent everywhere. (a) Keep in English letters any term whose Bangla would blur or change the meaning; on its first occurrence in this input add the Bangla meaning in brackets, e.g. liquidity (তরলতা), then use the English alone. (b) Use plain Bangla for ordinary words and terms with a standard exact Bangla equivalent. (c) Always keep acronyms, names, brands, code, formulas and numbers as they are.\n')
  +'5. If a paragraph is already Bangla, keep its wording and only fix English words/terms inside it by rule 4. Keep headings short and list formatting.\n'
+ +(strictNext?'STRICT MODE: a previous attempt omitted part of the text. Translate EVERY sentence, including analogies, examples and comparisons; do not summarise, compress or skip anything.\n':'')
++'\nOUTPUT: one JSON object only, with keys:\n'
+ +'"translations": array of objects {"i":number,"t":"Bangla text"}, one for EVERY input paragraph i (1 to N, where N is the number of input paragraphs), nothing skipped or merged. Add to each object "w": up to '+WMAP+' pairs [Bangla word exactly as written in your t, the exact English word or short phrase it translates from that source paragraph] for the important content words (nouns, verbs, adjectives, terms); skip function words.\n'
+ +'"new_terms": up to 10 important technical terms from this input that are NOT in the lists above, each {"en":"term","bn":"Bangla word you used OR KEEP_EN"}.\n'
+ +(bookCtx.profile?'':'"profile": 2-3 sentences describing the book\'s subject, tone and likely audience.\n')
  +(list.some(t=>String(t).includes('⟦G'))?'PROTECTED GLOSSARY TOKENS such as ⟦G0⟧ stand for fixed terms chosen by the reader. Copy every token EXACTLY as written (with its brackets) into the right place in your Bangla text. Never translate, change, drop, explain or duplicate a token; you may attach normal Bangla suffixes right after it.\n':'')
  +(T.keep.length?(noEn?'HARD TERMS (write in Bangla script, English in brackets on first use): ':'ALWAYS KEEP IN ENGLISH: ')+T.keep.join(', ')+'\n':'')
  +(T.map.length?'ALWAYS USE THESE TRANSLATIONS: '+T.map.join('; ')+'\n':'')
+ +(T.sug.length?'SUGGESTED TRANSLATIONS (not verified by the reader; use them if they fit the context, otherwise choose the better rendering): '+T.sug.join('; ')+'\n':'')
  +(gPrev?'\nPREVIOUS TRANSLATED TEXT (for continuity of voice and terms only; do not repeat it):\n'+gPrev+'\n':'')
- +'\nOUTPUT: one JSON object only, with keys:\n'
- +'"translations": array of objects {"i":number,"t":"Bangla text"}, one for EVERY input paragraph i (1 to '+list.length+'), nothing skipped or merged. Add to each object "w": up to 20 pairs [Bangla word exactly as written in your t, the exact English word or short phrase it translates from that source paragraph] for the important content words (nouns, verbs, adjectives, terms); skip function words.\n'
- +'"new_terms": up to 15 important technical terms from this input that are NOT in the lists above, each {"en":"term","bn":"Bangla word you used OR KEEP_EN"}.\n'
- +(bookCtx.profile?'':'"profile": 2-3 sentences describing the book\'s subject, tone and likely audience.\n')
  +'\nPARAGRAPHS (JSON array of {i,text}):\n'+JSON.stringify(list.map((t,k)=>({i:k+1,text:t})));
 }
 function restoreAI(t,toks){
@@ -1106,18 +1205,32 @@ function hardScore(p,h){
  if(p.length>650)sc+=0.5;
  const lw=(p.match(/[A-Za-z]{11,}/g)||[]).length;if(lw>=3)sc+=1;else if(lw>=1)sc+=0.5;
  if(/[;:—–()]/.test(p))sc+=0.5;
+ if(/\b(like an? |as if|as though|imagine|think of|analogy|metaphor|just as|resembles?|similar to)\b/i.test(p))sc+=1;
  const lossy=((h||'').match(/class="e"/g)||[]).length;if(lossy>=1)sc+=1;if(lossy>=3)sc+=1;
  const th=termCount(p);if(th)sc+=Math.min(1.5,th*0.5);
  return sc;
 }
 function cutCheck(orig,tr){
  const o=String(orig||'').trim(),x=String(tr||'').trim();
+ if(o.length>=150&&/\b(like an? |as if|as though|imagine|think of|analogy|metaphor|just as|resembles?)\b/i.test(o)&&!/(মতো|মত|যেন|যেমন|উপমা|তুলনা|কল্পনা|ভাবুন|ভাবো|সদৃশ|রূপক|ঠিক যেভাবে)/.test(x))return true;
  if(o.length<220)return false;
  const so=(o.match(/[.!?।;:]+(\s|$)/g)||[]).length,sx=(x.match(/[.!?।;:]+(\s|$)/g)||[]).length;
  return x.length/o.length<0.55||(so>=4&&sx<so*0.6);
 }
 document.head.appendChild(Object.assign(document.createElement('style'),{textContent:'.rc{border-bottom:1px dotted #c60;background:rgba(255,200,80,.18);border-radius:3px}.blk[data-cut="1"] .tr::after{content:" ⚠ AI-তে কিছু বাদ পড়তে পারে (⋯ মেনু → Google সংস্করণ)";font-size:12px;color:#c60}'}));
-function applyAI(b,txt){const d=b.querySelector('.tr');if(ocrUsed&&/\[[^\]]+\]/.test(txt))d.innerHTML=esc(txt).replace(/\[([^\]]+)\]/g,'<span class="rc">[$1]</span>');else d.textContent=txt;d.classList.add('ai');b.dataset.cut=cutCheck(b.querySelector('.o').textContent,txt)?'1':'';fin(d,b)}
+function queueFix(b){fixQ=fixQ.then(()=>fixCut(b)).catch(()=>{})}
+async function fixCut(b){
+ if(!document.body.contains(b))return;
+ const orig=b.querySelector('.o').textContent,k=pk(orig),old=await pget(k);
+ pmem.delete(k);kvDel(k);strictNext=true;
+ try{
+  const o=await gemTr([orig],3500,1),s=o&&o[0];
+  if(s&&!cutCheck(orig,s))applyAI(b,s);
+  else if(old!=null)pset(k,old);
+ }catch(e){if(old!=null)pset(k,old)}
+ finally{strictNext=false}
+}
+function applyAI(b,txt){const d=b.querySelector('.tr');if(ocrUsed&&/\[[^\]]+\]/.test(txt))d.innerHTML=esc(txt).replace(/\[([^\]]+)\]/g,'<span class="rc">[$1]</span>');else d.textContent=txt;d.classList.add('ai');b.dataset.cut=cutCheck(b.querySelector('.o').textContent,txt)?'1':'';if(b.dataset.cut==='1'&&RECUT&&!b._rc){b._rc=1;queueFix(b)}fin(d,b)}
 async function hybridAI(blks,my){
  const todo=[];
  for(const b of blks){const c=await pget(pk(b.querySelector('.o').textContent));if(c!=null&&my===tok)applyAI(b,c);else todo.push(b)}
@@ -1141,7 +1254,7 @@ async function translateAll0(){
  let blks=[...view.querySelectorAll('.blk')];
  for(const b of blks){b.querySelector('.tr').textContent='';b.querySelector('.tr').classList.remove('ai');b.querySelectorAll('.il').forEach(n=>n.remove());b.classList.remove('done','show','il-has');b.dataset.noau='';b.dataset.au='';b.dataset.cut=''}
  if(await applyPageLock(blks)){lastAiFor={key,pos};setSt('🔒 পাতা লক করা: নতুন অনুবাদ হয়নি (ডেটা ও কোটা বাঁচল)');showTally();aheadPump();setTimeout(syncPage,800);return}
- {const rest=[];for(const b of blks){const tx=b.querySelector('.o').textContent,lk=await pget('lk:'+hk(tx));if(lk&&lk.t){const d=b.querySelector('.tr');d.textContent=lk.t;fin(d,b)}else{const m=await pget('mp:'+hk(tx));if(m!=null){const d=b.querySelector('.tr');d.textContent=m;d.classList.add('ai');fin(d,b)}else{const au=await pget('au:'+hk(tx));if(au&&au.h!=null&&!/MYMEMORY WARNING/i.test(au.h)&&(au.gv===gver||!termHits(tx).length)){const d=b.querySelector('.tr');d.innerHTML=au.h;d.classList.toggle('ai',!!au.ai);b.dataset.au='1';fin(d,b)}else rest.push(b)}}}blks=rest}
+ {const rest=[];for(const b of blks){const tx=b.querySelector('.o').textContent,lk=await pget('lk:'+hk(tx));if(lk&&lk.t){const d=b.querySelector('.tr');d.textContent=lk.t;fin(d,b)}else{const m=await pget('mp:'+hk(tx));if(m!=null){const d=b.querySelector('.tr');d.textContent=m;d.classList.add('ai');fin(d,b)}else{const au=await pget('au:'+hk(tx));if(au&&au.h!=null&&!/MYMEMORY WARNING/i.test(au.h)){const d=b.querySelector('.tr');d.innerHTML=au.h;d.classList.toggle('ai',!!au.ai);b.dataset.au='1';fin(d,b)}else rest.push(b)}}}blks=rest}
  if(llmOn()&&!hy){
   const nm=provName();setSt('⏳ AI অনুবাদ হচ্ছে ('+nm+')…');
   try{await gemAll(blks,my);if(my===tok){lastAiFor={key,pos};setSt('✓ AI অনুবাদ ('+(usedFb?provName():nm)+')');showTally();aheadPump();setTimeout(syncPage,800)}return}
@@ -1486,8 +1599,11 @@ $('#bGpt').onclick=async()=>{
 let preStop=false;
 $('#bOff').onclick=()=>{
  sheet.style.display='flex';
- out.innerHTML='<div>ইন্টারনেট থাকতে এটা চালান। পুরো বই আগে থেকে অনুবাদ হয়ে ফোনে জমা থাকবে, পরে ইন্টারনেট ছাড়াই পড়তে পারবেন। শুরু করে এই প্যানেল বন্ধ করে নিশ্চিন্তে বই পড়তে পারেন, কাজ পেছনে চলবে, ওপরের ছোট লাইনে অগ্রগতি দেখাবে। স্ক্রিন বন্ধ না হতে দেওয়ার চেষ্টা করা হয়, কিন্তু অন্য অ্যাপে চলে গেলে ফোন কাজ থামিয়ে দিতে পারে। ফিরে ⬇ চাপলে আপনার বর্তমান পাতা থেকে এগোবে।</div><div style="margin-top:8px">শুরুর পাতা: <input class="gi" id="pfrom" type="number" min="1" style="width:100px;display:inline-block"> থেকে শেষ পর্যন্ত (ডিফল্ট: আপনি এখন যে পাতায়, আগের পাতাগুলো বাদ)</div><button class="p" id="ps" style="margin-top:8px">⬇ শুরু করুন</button> <button id="pt">থামান</button><div id="pp" style="margin-top:8px"></div>';
- $('#pfrom').value=pos+1;
+ out.innerHTML='<div>ইন্টারনেট থাকতে এটা চালান। পুরো বই আগে থেকে অনুবাদ হয়ে ফোনে জমা থাকবে, পরে ইন্টারনেট ছাড়াই পড়তে পারবেন। শুরু করে এই প্যানেল বন্ধ করে নিশ্চিন্তে বই পড়তে পারেন, কাজ পেছনে চলবে, ওপরের ছোট লাইনে অগ্রগতি দেখাবে। স্ক্রিন বন্ধ না হতে দেওয়ার চেষ্টা করা হয়, কিন্তু অন্য অ্যাপে চলে গেলে ফোন কাজ থামিয়ে দিতে পারে। থামালে বা কোটা শেষ হলে পরে ⬇ চাপলে শেষবার যেখানে থেমেছিল সেখান থেকে এগোবে।</div><div style="margin-top:8px">শুরুর পাতা: <input class="gi" id="pfrom" type="number" min="1" style="width:100px;display:inline-block"> থেকে শেষ পর্যন্ত (ডিফল্ট: শেষবার যেখানে থেমেছিল, না থাকলে আপনি এখন যে পাতায়)</div><div style="margin-top:8px"><select class="gi" id="lkm"><option value="ai">লক-নিয়ম 🅰 AI-ই চূড়ান্ত: শুধু AI-র অনুবাদ লক হয়, Google/শব্দকোষের অংশ খোলা থাকে (প্রস্তাবিত)</option><option value="all">লক-নিয়ম 🅱 সব লক: Google হলেও লক হয় (আগের নিয়ম)</option></select></div><button class="p" id="ps" style="margin-top:8px">⬇ শুরু করুন</button> <button id="pt">থামান</button><div id="pp" style="margin-top:8px"></div>';
+ {const pp0=prePtr();$('#pfrom').value=pp0?pp0+1:pos+1;
+  $('#pfrom').parentElement.insertAdjacentHTML('beforeend','<div style="font-size:13px;color:var(--mut);margin-top:4px">'+(pp0?'আগেরবার পাতা '+pp0+' পর্যন্ত অনুবাদ হয়ে লক হয়েছে, তাই পাতা '+(pp0+1)+' থেকে চলবে। বর্তমান পাতা (পাতা '+(pos+1)+') থেকে চাইলে <a href="#" id="pcur">এখানে চাপুন</a>।':'')+'</div>');
+  const ac=$('#pcur');if(ac)ac.onclick=e=>{e.preventDefault();$('#pfrom').value=pos+1}}
+ {const sel=$('#lkm');if(sel){sel.value=LKM;sel.onchange=()=>{LKM=sel.value;ls.set('lkm',LKM);toast(LKM==='ai'?'নিয়ম: AI-ই চূড়ান্ত':'নিয়ম: সব লক',2500)}}}
  $('#ps').onclick=preRun;$('#pt').onclick=()=>{preStop=true};
 };
 let wl=null,preBusy=false;
@@ -1496,28 +1612,48 @@ function wlOff(){try{wl&&wl.release()}catch(e){}wl=null}
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&preBusy)wlOn()});
 function preUi(t,pct){$('#pbar').style.display=preBusy?'flex':'none';$('#pbt').textContent=t;$('#bOff').textContent=preBusy?'⬇ '+(pct!=null?pct+'%':'চলছে'):'⬇ অফলাইন'}
 $('#pbx').onclick=()=>{preStop=true};
+
+// ===== v5.4: অফলাইন ডাউনলোড — অনুচ্ছেদ-লক + থামা জায়গা থেকে আবার শুরু =====
+async function lockPageCore(k0,p,ps,hs,want){
+ if(RS.autolock===false||key!==k0)return 0;
+ let pend=0;
+ for(let k=0;k<ps.length;k++){
+  const hh=hk(ps[k]);
+  if(await pget('au:'+hh)!=null||(await pget('lk:'+hh))||await pget('mp:'+hh)!=null)continue;
+  const a=want.has(k)?await pget(pk(ps[k])):null;
+  if(want.has(k)&&a==null){pend++;continue}
+  if(a==null&&!hs[k]){pend++;continue}
+  if(a!=null&&cutCheck(ps[k],a))continue;
+  if(aiFinal()&&a==null)continue;
+  pset('au:'+hh,{h:a!=null?esc(a):hs[k],ai:a!=null,gv:gver,at:Date.now()});
+ }
+ if(!pend&&ps.length&&hs.every(x=>x))await autoLockAhead(k0,p,ps,hs);
+ return pend;
+}
+const prePtr=()=>{const v=+ls.get('pn:'+key);return Number.isFinite(v)&&v>0&&v<total?v:0};
 async function preAI(i0){
  const pp=$('#pp')||document.createElement('div');preStop=false;let i=i0||0;
  while(i<total&&!preStop){
-  const pend=[];let n=0,j=i;
-  while(j<total&&n<8000&&j<i+12){let ps;try{ps=await book.get(j)}catch(e){ps=[]}pend.push(...ps);n+=ps.join('').length;j++}
+  const pend=[],pgs=[];let n=0,j=i;
+   while(j<total&&n<8000&&j<i+12){let ps;try{ps=await book.get(j)}catch(e){ps=[]}pgs.push({p:j,ps});pend.push(...ps);n+=ps.join('').length;j++}
   pp.textContent='AI অনুবাদ হচ্ছে… পাতা '+(i+1)+'–'+j+' / '+total;preUi('⬇ AI অনুবাদ… পাতা '+(i+1)+'–'+j+'/'+total,Math.round(j/total*100));ls.set('pre:'+key,String(i));
   const c0=aiCalls;
   try{
    const o=await gemTr(pend,9000,2);
-   try{await prefetchWords(o.filter(x=>x))}catch(e){}
+    for(const pg of pgs){try{await lockPageCore(key,pg.p,pg.ps,pg.ps.map(()=>''),new Set(pg.ps.map((_,k)=>k)))}catch(e){}}
+    try{await prefetchWords(o.filter(x=>x))}catch(e){}
    try{const ew=[...new Set(pend.filter(p=>lat(p)>bn(p)).flatMap(p=>contentWords(p).map(w=>w.toLowerCase())))];if(ew.length)await bnOf(ew)}catch(e){}
   }catch(e){pp.textContent=gerr(e).replace(' এখন Google Translate চলছে।','').replace(' Google Translate দিয়ে চলছে।','')+' পাতা '+i+' পর্যন্ত জমা হয়েছে। কোটা ফিরলে বা নেট এলে নিজে থেকেই এখান থেকে এগোবে (অ্যাপ খোলা রাখুন)।';if(e.status===429||isRetryErr(e)){cjSet({from:i0||0,to:total-1,next:i})}return}
-  i=j;
-  if(aiCalls>c0)await new Promise(r=>setTimeout(r,gp==='gemini'?5000:1500));
- }
- if(!preStop){ls.set('preon:'+key,'0');ls.set('pre:'+key,'0')}
+  i=j;ls.set('pn:'+key,String(i));
+   if(aiCalls>c0)await new Promise(r=>setTimeout(r,gp==='gemini'?5000:1500));
+  }
+  if(!preStop){ls.set('preon:'+key,'0');ls.set('pre:'+key,'0');ls.set('pn:'+key,'0')}
  pp.textContent=preStop?'থামানো হয়েছে। পরে আবার চালাতে পারবেন।':'✅ পুরো বই AI দিয়ে অনুবাদ হয়ে জমা হয়েছে। এখন ইন্টারনেট ছাড়াই পড়তে পারবেন।';
 }
 async function preRun(){
  if(preBusy){toast('আগে থেকেই চলছে — ওপরের লাইনে দেখুন');return}
  if(!book){const p=$('#pp');if(p)p.textContent='আগে একটা বই খুলুন।';return}
- const pf=$('#pfrom'),from=Math.min(total-1,Math.max(0,(pf&&+pf.value?+pf.value:pos+1)-1)),resume=from;
+ const pf=$('#pfrom'),from=Math.min(total-1,Math.max(0,(pf&&+pf.value?+pf.value:(prePtr()||pos)+1)-1)),resume=from;
  preBusy=true;ls.set('preon:'+key,'1');wlOn();preUi('⬇ অফলাইনের জন্য অনুবাদ শুরু হচ্ছে…',0);
  try{await preRunInner(resume)}finally{preBusy=false;wlOff();preUi('',null)}
 }
@@ -1527,33 +1663,52 @@ async function preRunInner(i0){
  preStop=false;let bad=0;
  if(aiBlocked()){pp.textContent='AI-র ফ্রি কোটা এখন শেষ। চালু হবে: '+new Date(qWait()).toLocaleString([],{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})+'। তখন আবার চালান।';return}
  if(llmOn()&&!hy){await preAI(i0);return}
- let hardBuf=[],hardN=0,aiDead=false,aiMsg='';
+ let hardBuf=[],hardN=0,aiDead=false,aiMsg='',aiRetry=false,lastDone=i0||0;
+ const k0=key,pendP=[];
  const flushHard=async()=>{
   if(!hardBuf.length||aiDead)return;
   const c0=aiCalls;
-  try{await gemTr(hardBuf,9000,2)}catch(e){aiDead=true;aiMsg=gerr(e).replace(' এখন Google Translate চলছে।','').replace(' Google Translate দিয়ে চলছে।','')}
+  try{await gemTr(hardBuf,9000,2)}catch(e){aiDead=true;aiRetry=isRetryErr(e)||!!e.rl;aiMsg=gerr(e).replace(' এখন Google Translate চলছে।','').replace(' Google Translate দিয়ে চলছে।','')}
   hardBuf=[];hardN=0;
   if(aiCalls>c0)await new Promise(r=>setTimeout(r,gp==='gemini'?5000:1500));
+ };
+ // যে পাতা পুরো শেষ (Google + দরকারি AI) সেগুলো অনুচ্ছেদ ধরে লক; বাকি পাতা পয়েন্টারে থাকে
+ const settle=async(nextI)=>{
+  while(pendP.length){
+   const e=pendP[0],w=(aiDead&&!aiRetry)?new Set():e.want;
+   const pend=await lockPageCore(k0,e.i,e.ps,e.hs,w);
+   if(pend)break;
+   pendP.shift();
+  }
+  ls.set('pn:'+k0,String(pendP.length?pendP[0].i:nextI));
  };
  for(let i=i0||0;i<total&&!preStop;i++){
   pp.textContent='অনুবাদ হচ্ছে… পাতা '+(i+1)+' / '+total;preUi('⬇ অফলাইনের জন্য অনুবাদ হচ্ছে… পাতা '+(i+1)+'/'+total,Math.round((i+1)/total*100));ls.set('pre:'+key,String(i));
   let ps;try{ps=await book.get(i)}catch(e){continue}
-  const seen=new Set(),nf=netFail;
-  const hs=await pool(ps,async p=>{try{return await trPara(p,seen)}catch(e){return ''}},2);
+  const seen=new Set(),nf=netFail,lockedK=new Set();
+  for(let k=0;k<ps.length;k++){const a=await pget('au:'+hk(ps[k]));if(a&&a.h!=null)lockedK.add(k)}
+  if(ps.length&&lockedK.size===ps.length){lastDone=i+1;if(!pendP.length)ls.set('pn:'+k0,String(i+1));continue}
+  const hs=await pool(ps,async p=>{const a=await pget('au:'+hk(p));if(a&&a.h!=null)return a.h;try{return await trPara(p,seen)}catch(e){return ''}},2);
+  const want=new Set();
   if(llmOn()&&hy&&!aiDead){
-   const cand=hardSel(ps.map((p,k)=>({p,s:hardScore(p,hs[k]||'')})),hyPct);
-   cand.forEach(x=>{hardBuf.push(x.p);hardN+=x.p.length});
+   const cand=hardSel(ps.map((p,k)=>({p,k,s:hardScore(p,hs[k]||'')})).filter(x=>!lockedK.has(x.k)),hyPct);
+   cand.forEach(x=>{want.add(x.k);hardBuf.push(x.p);hardN+=x.p.length});
    if(hardN>=7000)await flushHard();
   }
+  pendP.push({i,ps,hs,want});
   await prefetchWords(hs);
   try{const ew=[...new Set(ps.filter(p=>lat(p)>bn(p)).flatMap(p=>contentWords(p).map(w=>w.toLowerCase())))];if(ew.length)await bnOf(ew)}catch(e){}
+  await settle(i+1);lastDone=i+1;
   bad=netFail>nf?bad+1:0;
-  if(bad>=3){pp.textContent='অনুবাদ সার্ভিস সাড়া দিচ্ছে না (ইন্টারনেট দেখুন)। পরে আবার চালান, জমা অংশ থেকে এগোবে।';return}
+  if(bad>=3){pp.textContent='অনুবাদ সার্ভিস সাড়া দিচ্ছে না (ইন্টারনেট দেখুন)। পরে আবার চালান, লক হওয়া পাতার পর থেকে এগোবে।';return}
   await new Promise(r=>setTimeout(r,250));
  }
- if(!preStop)await flushHard();
- if(!preStop){ls.set('preon:'+key,'0');ls.set('pre:'+key,'0')}
- pp.textContent=preStop?'থামানো হয়েছে। পরে আবার চালাতে পারবেন।':(aiDead?'✅ Google অনুবাদ সম্পূর্ণ, ইন্টারনেট ছাড়াই পড়া যাবে। তবে কঠিন অংশে AI থেমেছে: '+aiMsg+' পরে আবার চালালে বাকিটা AI করবে।':'✅ পুরো বই অনুবাদ হয়ে জমা হয়েছে (সহজ অংশ Google, কঠিন অংশ AI)। এখন ইন্টারনেট ছাড়াই পড়তে পারবেন।');
+ if(preStop&&hardBuf.length&&!aiDead)pp.textContent='থামছে… চলতি অংশটা শেষ করে লক করা হচ্ছে';
+ await flushHard();
+ await settle(preStop?lastDone:total);
+ const complete=!preStop&&!pendP.length;
+ if(complete){ls.set('preon:'+key,'0');ls.set('pre:'+key,'0');ls.set('pn:'+key,'0')}
+ pp.textContent=preStop?'থামানো হয়েছে। পাতা '+(+ls.get('pn:'+key)||0)+' পর্যন্ত লক। আবার চালালে ঠিক এখান থেকেই শুরু হবে।':(!complete?'⚠ AI সংযোগ পায়নি, তাই কিছু কঠিন অংশ বাকি: '+aiMsg+' আবার চালালে বাকিটা থেকে এগোবে।':(aiDead?'✅ Google অনুবাদ সম্পূর্ণ ও লক, ইন্টারনেট ছাড়াই পড়া যাবে। তবে কঠিন অংশে AI থেমেছে: '+aiMsg+' পরে আবার চালালে বাকিটা AI করবে।':'✅ পুরো বই অনুবাদ হয়ে লক হয়েছে (সহজ অংশ Google, কঠিন অংশ AI)। এখন ইন্টারনেট ছাড়াই পড়তে পারবেন।'));
 }
 $('#bGl').onclick=()=>{
  sheet.style.display='flex';
@@ -1590,6 +1745,8 @@ $('#bGl').onclick=()=>{
 +'<div style="font-size:13px;margin-top:4px"><b>Gemini</b> প্রতি মিনিটে অনুরোধ <input class="gi" id="lm_g_rpm" type="number" style="width:70px;display:inline-block"> টোকেন <input class="gi" id="lm_g_tpm" type="number" style="width:100px;display:inline-block"> দিনে অনুরোধ <input class="gi" id="lm_g_rpd" type="number" style="width:70px;display:inline-block"></div>'
 +'<div style="font-size:13px;margin-top:4px"><b>Groq</b> প্রতি মিনিটে অনুরোধ <input class="gi" id="lm_r_rpm" type="number" style="width:70px;display:inline-block"> টোকেন <input class="gi" id="lm_r_tpm" type="number" style="width:80px;display:inline-block"> দিনে অনুরোধ <input class="gi" id="lm_r_rpd" type="number" style="width:70px;display:inline-block"> দিনে টোকেন <input class="gi" id="lm_r_tpd" type="number" style="width:90px;display:inline-block"> প্রতি অনুরোধে সর্বোচ্চ অক্ষর <input class="gi" id="lm_r_b" type="number" style="width:80px;display:inline-block"></div>'
 +'<button id="lmz">আজকের গণনা শূন্য করুন</button><div id="lmm" style="font-size:13px;margin-top:4px"></div>'
++'<div style="margin-top:10px"><b>🧠 অনুবাদের মান</b></div><label style="display:block;margin:4px 0"><input type="checkbox" id="recut"> AI-তে কিছু বাদ পড়লে (যেমন উপমা) সেই অনুচ্ছেদ নিজে থেকে একবার আবার পাঠান (সামান্য কোটা লাগে)</label><select class="gi" id="wmap"><option value="4">ট্যাপে ইংরেজি দেখানোর জোড়া: কম (কোটা সাশ্রয়)</option><option value="8">ট্যাপে ইংরেজি দেখানোর জোড়া: মাঝারি</option><option value="20">ট্যাপে ইংরেজি দেখানোর জোড়া: বেশি (আগের মতো, কোটা বেশি লাগে)</option></select>'
++'<div style="margin-top:10px"><b>🔒 লক-নিয়ম</b><br><span style="font-size:13px;color:var(--mut)">🅰 AI-ই চূড়ান্ত: AI যা অনুবাদ করে সেটাই চূড়ান্ত হয়ে লক হয় (আগামী পাতা বা অফলাইন ডাউনলোড যেখানেই হোক), আর আপডেট লাগে না। Google ও শব্দকোষের অনুবাদ খোলা থাকে, AI কাজ না করা পর্যন্ত। 🅱 সব লক: Google হলেও লক।</span></div><select class="gi" id="lkm"><option value="ai">🅰 AI-ই চূড়ান্ত (প্রস্তাবিত)</option><option value="all">🅱 সব লক (আগের নিয়ম)</option></select>'
 +'<div style="margin-top:10px"><b>🔍 স্ক্যান করা বই (OCR)</b><br><span style="font-size:13px;color:var(--mut)">PDF-এ লেখা না থাকলে (ছবির পাতা) অ্যাপ নিজে পাতা পড়ে নেয়, তারপর আগের মতো Google + শব্দকোষে আগে অনুবাদ হয়। আর বাকি কঠিন অংশে AI ঠিক করে, তাই AI কোটা কম লাগে। প্রতিটি পাতার পড়া লেখা জমা থাকে, দ্বিতীয়বার লাগে না। প্রথমবার ভাষার ডেটা ইন্টারনেট থেকে নামে।</span></div>'
 +'<label style="display:block;margin:4px 0"><input type="checkbox" id="ocron"> ছবির পাতায় OCR চালু</label>'
 +'<select class="gi" id="ocrl"><option value="eng">বইয়ের ভাষা: ইংরেজি</option><option value="hin">বইয়ের ভাষা: হিন্দি</option><option value="eng+hin">বইয়ের ভাষা: ইংরেজি + হিন্দি মেশানো (ধীর)</option></select>'
@@ -1617,7 +1774,7 @@ $('#bGl').onclick=()=>{
    try{const r=await migFromV4(x=>{m.textContent=x});m.textContent='✅ কপি শেষ: সেটিং '+r.ls+'টি, বই ও অনুবাদ '+r.idb+'টি। অ্যাপ নতুন করে খুলছে…';setTimeout(()=>location.reload(),1500)}
    catch(e){m.textContent='❌ কপি হয়নি: '+(e.message||e)}
   };
-  $('#ocron').checked=ocrOn;$('#ocrl').value=ocrLang;$('#gauto').checked=gauto;
+  $('#lkm').value=LKM;$('#recut').checked=RECUT;$('#wmap').value=String(WMAP);$('#ocron').checked=ocrOn;$('#ocrl').value=ocrLang;$('#gauto').checked=gauto;
   $('#gms').onclick=async()=>{
    const o=$('#gmm'),k=$('#gk').value.trim();
    if(!k){o.textContent='আগে Gemini API key বসান';return}
@@ -1706,7 +1863,7 @@ $('#bGl').onclick=()=>{
   saveGl();ls.set('gk',gk);ls.set('gm2',gm);ls.set('gtp',gtp);
   g2=$('#g2on').checked;oaU2=$('#oau2').value.trim()||'https://api.groq.com/openai/v1';oaM2=$('#oam2').value.trim();oaK2=$('#oak2').value.trim();qUntil2=0;
   [['lm_g_rpm','gem','rpm'],['lm_g_tpm','gem','tpm'],['lm_g_rpd','gem','rpd'],['lm_r_rpm','gro','rpm'],['lm_r_tpm','gro','tpm'],['lm_r_rpd','gro','rpd'],['lm_r_tpd','gro','tpd'],['lm_r_b','gro','batch']].forEach(([id,P,k])=>{const v=+$('#'+id).value;if(v>0)LM[P][k]=v});saveLM();LMON=$('#lmon').checked;ls.set('lmon',LMON?'1':'0');glAuto2=$('#glauto2').checked;ls.set('glauto2',glAuto2?'1':'0');
-  gauto=$('#gauto').checked;ls.set('gauto',gauto?'1':'0');ocrOn=$('#ocron').checked;ocrLang=$('#ocrl').value;ls.set('ocr',ocrOn?'1':'0');ls.set('ocrl',ocrLang);if(gauto)autoModels(true);
+  gauto=$('#gauto').checked;ls.set('gauto',gauto?'1':'0');LKM=$('#lkm').value;ls.set('lkm',LKM);RECUT=$('#recut').checked;ls.set('recut',RECUT?'1':'0');WMAP=+$('#wmap').value||8;ls.set('wmap',String(WMAP));ocrOn=$('#ocron').checked;ocrLang=$('#ocrl').value;ls.set('ocr',ocrOn?'1':'0');ls.set('ocrl',ocrLang);if(gauto)autoModels(true);
   ls.set('g2',g2?'1':'0');ls.set('oau2',oaU2);ls.set('oam2',oaM2);ls.set('oak2',oaK2);ls.set('qu2','0');
   sheet.style.display='none';toast(llmOn()?'সেভ হয়েছে, AI চালু':'সেভ হয়েছে');
   if(book){vc();if(auto)translateAll()}
@@ -1739,17 +1896,19 @@ function openRS(){
  <select class="gi" id="rlh"><option value="1.6">লাইনের ফাঁক: কম</option><option value="1.9">লাইনের ফাঁক: মাঝারি</option><option value="2.2">লাইনের ফাঁক: বেশি</option></select>
  <select class="gi" id="rw"><option value="560">পাতার চওড়া: সরু</option><option value="680">পাতার চওড়া: মাঝারি</option><option value="820">পাতার চওড়া: চওড়া</option></select>
  <select class="gi" id="rah"><option value="1">আগে থেকে অনুবাদ: পরের ১ পাতা</option><option value="3">আগে থেকে অনুবাদ: পরের ৩ পাতা</option><option value="5">আগে থেকে অনুবাদ: পরের ৫ পাতা</option><option value="10">আগে থেকে অনুবাদ: পরের ১০ পাতা</option></select>
+ <select class="gi" id="rpi"><option value="auto">মূল পাতার ছবি (PDF): যেখানে ছবি আছে শুধু সেখানে</option><option value="always">মূল পাতার ছবি (PDF): সব পাতায়</option><option value="off">মূল পাতার ছবি (PDF): বন্ধ</option></select>
+ <label style="display:block;margin:6px 0"><input type="checkbox" id="rbi"> EPUB/MOBI-র ছবি লেখার মাঝে দেখান</label>
  <label style="display:block;margin:6px 0"><input type="checkbox" id="rai"> আগে থেকে AI-ও চালাও (কোটা লাগে, শুধু কঠিন অংশে)</label>
  <label style="display:block;margin:6px 0"><input type="checkbox" id="ril"> বাক্য-পাশাপাশি (মূল ও অনুবাদ বাক্য ধরে)</label>
  <label style="display:block;margin:6px 0"><input type="checkbox" id="rsw"> আঙুল টেনে (সোয়াইপ) পাতা বদল</label>
  <label style="display:block;margin:6px 0"><input type="checkbox" id="rwk"> পড়ার সময় স্ক্রিন বন্ধ হতে দেবে না</label>
  <button id="rfs">⛶ পুরো স্ক্রিন</button> <button id="rcl">বন্ধ করুন</button>`;
  $('#rth').value=RS.theme;$('#rfo').value=RS.font;$('#rlh').value=String(RS.lh);$('#rw').value=String(RS.w);$('#rah').value=String(RS.ahead);
- $('#rai').checked=RS.aheadAI!==false;$('#ril').checked=ilOn;$('#rsw').checked=RS.swipe;$('#rwk').checked=RS.wake;
+ $('#rpi').value=RS.pgimg||'auto';$('#rbi').checked=RS.bkimg!==false;$('#rai').checked=RS.aheadAI!==false;$('#ril').checked=ilOn;$('#rsw').checked=RS.swipe;$('#rwk').checked=RS.wake;
  $('#rfm').onclick=()=>{fs=Math.max(14,fs-2);applyRS()};
  $('#rfp').onclick=()=>{fs=Math.min(36,fs+2);applyRS()};
- const up=()=>{RS.theme=$('#rth').value;RS.font=$('#rfo').value;RS.lh=+$('#rlh').value;RS.w=+$('#rw').value;RS.ahead=+$('#rah').value;RS.swipe=$('#rsw').checked;RS.wake=$('#rwk').checked;RS.aheadAI=$('#rai').checked;saveRS();applyRS();aheadPump()};
- ['rth','rfo','rlh','rw','rah','rsw','rwk','rai'].forEach(i=>$('#'+i).onchange=up);
+ const up=()=>{RS.theme=$('#rth').value;RS.font=$('#rfo').value;RS.lh=+$('#rlh').value;RS.w=+$('#rw').value;RS.ahead=+$('#rah').value;RS.swipe=$('#rsw').checked;RS.wake=$('#rwk').checked;RS.aheadAI=$('#rai').checked;const pi0=RS.pgimg,bi0=RS.bkimg;RS.pgimg=$('#rpi').value;RS.bkimg=$('#rbi').checked;saveRS();applyRS();aheadPump();if(book&&(pi0!==RS.pgimg||bi0!==RS.bkimg))addImages(pos)};
+ ['rth','rfo','rlh','rw','rah','rsw','rwk','rai','rpi','rbi'].forEach(i=>$('#'+i).onchange=up);
  $('#ril').onchange=()=>setIL($('#ril').checked);
  $('#rfs').onclick=()=>{try{document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()}catch(e){toast('পুরো স্ক্রিন চালু হয়নি')}};
  $('#rcl').onclick=()=>{sheet.style.display='none'};
@@ -2261,7 +2420,7 @@ function openExport(){
 }
 
 // ===== v3.2: ইনস্টল পরীক্ষা, ধাপে ধাপে আগাম অনুবাদ, সিঙ্ক =====
-const APPV='5.3';
+const APPV='5.6';
 let aheadTok=0,aheadDone={};
 function setAh(t){lastAhTxt=t||'';showMeter()}
 async function aheadPump(){
@@ -2272,6 +2431,9 @@ async function aheadPump(){
  for(let p=pos+1;p<=last&&my===aheadTok;p++){
   if(aheadDone[key+':'+p]){lastDone=p;continue}
   if(pliGet().some(x=>x.pos===p)){aheadDone[key+':'+p]=true;lastDone=p;continue}
+  {let p0=[];try{p0=await book.get(p)}catch(e){}
+   if(p0.length){let all=true;for(const q of p0){const h=hk(q);if(await pget('au:'+h)==null&&!(await pget('lk:'+h))&&await pget('mp:'+h)==null){all=false;break}}
+    if(all){aheadDone[key+':'+p]=true;lastDone=p;continue}}}
   setAh('⏩ আগে থেকে তৈরি হচ্ছে: পাতা '+(p+1)+' (পরের '+N+' পাতার মধ্যে)');
   let ps=[];try{ps=await book.get(p)}catch(e){}
   if(my!==aheadTok)return;
@@ -2295,6 +2457,8 @@ async function aheadPump(){
      const hh=hk(ps[k]),a=wantAI.has(k)?await pget(pk(ps[k])):null;
      if(wantAI.has(k)&&a==null){pend++;continue}
      if(a==null&&!hs[k]){pend++;continue}
+     if(a!=null&&cutCheck(ps[k],a))continue;
+     if(aiFinal()&&a==null)continue;
      if((await pget('lk:'+hh))||await pget('mp:'+hh)!=null)continue;
      pset('au:'+hh,{h:a!=null?esc(a):hs[k],ai:a!=null,gv:gver,at:Date.now()});
     }
@@ -2447,6 +2611,7 @@ async function maybeAutoLock(){
  const blks=[...view.querySelectorAll('.blk')];
  if(!blks.length||blks.some(b=>!b.classList.contains('done')||b.dataset.sy==='1'))return;
  if(blks.some(b=>/⚠ অনুবাদ হয়নি/.test(b.querySelector('.tr').textContent)))return;
+ if(aiFinal()&&blks.some(b=>!b.querySelector('.tr').classList.contains('ai')))return;
  if(await lockPageNow(true)){const st=$('#st');if(st&&!st.textContent.includes('অটো-লক'))st.textContent+=' · 🔒 অটো-লক'}
 }
 async function autoLockAhead(k0,p,ps,hs){
@@ -2459,6 +2624,7 @@ async function autoLockAhead(k0,p,ps,hs){
   const a=await pget(pk(q));if(a!=null){H.push(esc(a));A.push(true);continue}
   H.push(hs[i]);A.push(false);
  }
+ if(aiFinal()&&!A.every(x=>x))return;
  for(let i=0;i<ps.length;i++){const hh=P[i];if(await pget('au:'+hh)==null&&!(await pget('lk:'+hh))&&await pget('mp:'+hh)==null)pset('au:'+hh,{h:H[i],ai:A[i],gv:gver,at:Date.now()})}
  pset('pl:'+k0+':'+p,{p:P,h:H,ai:A,auto:true,gv:gver,at:Date.now()});pliSetK(k0,p,true,true);
 }
@@ -2510,6 +2676,7 @@ async function lockParas(blks){
   if(b.dataset.au||b.dataset.noau||b.dataset.cut==='1'||b.dataset.sy==='1'||!b.classList.contains('done'))continue;
   const d=b.querySelector('.tr'),tx=b.querySelector('.o').textContent,h0=hk(tx);
   if(/⚠ অনুবাদ হয়নি|MYMEMORY WARNING/i.test(d.textContent))continue;
+  if(aiFinal()&&!d.classList.contains('ai'))continue;
   const lk=await pget('lk:'+h0);if(lk&&lk.t)continue;
   if(await pget('mp:'+h0)!=null)continue;
   const c=d.cloneNode(true);
