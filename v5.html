@@ -300,6 +300,7 @@ async function openPdf(buf){
   if(!finMap[i]){try{const ol=await Promise.race([olFor(i),new Promise(r=>setTimeout(()=>r(null),2500))]);if(ol){metaMap[i]=pdfHeads(rrMap[i],ol);finMap[i]=1}}catch(e){}}
   return metaMap[i]||[];
  };
+ api.metaNow=i=>metaMap[i]||[];
  return api;
 }
 // ===== v6.1: হেডিং চেনা (h1–h6, class, সূচি, PDF-এর অক্ষর-মাপ) =====
@@ -677,7 +678,7 @@ function attachCover(x,cv){
 }
 function showLib(){
  const l=lib();sheet.style.display='none';view.className='';
- view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ৭)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
+ view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ৯)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
  const grid=document.createElement('div');grid.className='shelf';view.append(grid);
  l.forEach(x=>{
   const card=document.createElement('div');card.className='bcard';
@@ -699,7 +700,8 @@ $('#bLib').onclick=showLib;
 async function show(){
  view.innerHTML='';sheet.style.display='none';
  try{paras=await book.get(pos)}catch(e){paras=[]}
- let mt=[];try{mt=(book.meta?await book.meta(pos):[])||[]}catch(e){mt=[]}
+ let mt=[];try{mt=(book.metaNow?book.metaNow(pos):(book.meta?await book.meta(pos):[]))||[]}catch(e){mt=[]}
+ if(book.metaNow){const p0=pos,k0=key;book.meta(p0).then(m2=>setTimeout(()=>{if(pos!==p0||key!==k0)return;[...view.querySelectorAll('.blk')].forEach((b,i)=>{const mm=m2[i];if(mm&&mm.l!=null&&!b.classList.contains('hd'))b.classList.add('hd','h'+(mm.l+1))})},0)).catch(()=>{})}
  if(!paras.length){view.innerHTML='<div class="hello">এই পাতায় পড়ার মতো লেখা নেই (ছবি থাকলে নিচে দেখানো হয়; স্ক্যান করা PDF-এ OCR চালু রাখুন)।</div>'}
  paras.forEach((t,pi)=>{const b=document.createElement('div');b.className='blk';const mm=mt[pi];if(mm){if(mm.l!=null){b.classList.add('hd','h'+(mm.l+1))}else{if(mm.li)b.classList.add('li');if(mm.q)b.classList.add('bq')}}const o=document.createElement('p');o.className='o';o.textContent=t;const d=document.createElement('p');d.className='tr';b.append(o,d);view.append(b)});
  vc();if(auto)translateAll();loadNotes();loadPageCard();
@@ -945,7 +947,7 @@ function showTally(){
  const e=Object.entries(useCnt).sort((a,b)=>b[1]-a[1]),el=$('#tl');
  el.textContent=e.length?'📚 শব্দকোষ/স্মৃতি থেকে বসেছে: '+e.slice(0,8).map(([k,v])=>k+' ×'+v).join(', ')+(e.length>8?' …':''):'';
 }
-const AI_TOKS=20;
+const AI_TOKS=12;
 function protect(p,mode){
  const toks=[];let t=p;
  const G=glRe||buildGl();
@@ -1355,12 +1357,7 @@ async function gemTr(list,max,prio){
   const lost=[];
   raw.forEach((t,j)=>{if(t!=null&&(res[j]==null||!String(res[j]).trim()))lost.push(j)});
   if(lost.length){
-   // গ্লসারি-চিহ্ন হারিয়ে গেলে: ওই অনুচ্ছেদ চিহ্ন ছাড়া সাদা লেখা দিয়ে আবার পাঠানো
-   try{
-    const s2=lost.map(j=>list[idx[j]]);
-    const r2=await callBatch(s2,s2,prio);
-    lost.forEach((j,q)=>{if(r2[q]!=null&&String(r2[q]).trim())res[j]=r2[q]});
-   }catch(e){}
+   // চিহ্ন হারালে বাড়তি AI-কল নয় (কোটা বাঁচে): যা পাওয়া গেছে তা বসিয়ে নিই, শব্দকোষ শুধু সহায়ক
    lost.forEach(j=>{if((res[j]==null||!String(res[j]).trim())&&raw[j]!=null)res[j]=restoreLoose(normTok(raw[j]),pr[j].toks)});
   }
   idx.forEach((k,j)=>{if(res[j]!=null){const v=cleanTok(res[j],list[k]);if(v&&v.trim()){out[k]=v;pset(pk(list[k]),v)}}});
@@ -3022,7 +3019,7 @@ async function lockPageNow(auto){
   t.querySelectorAll('[data-base]').forEach(s=>{s.textContent=s.dataset.base;delete s.dataset.open});
   h.push(t.innerHTML);ai.push(b.querySelector('.tr').classList.contains('ai'));
  }
- const okAi=blks.map(b=>b.querySelector('.tr').classList.contains('ai')&&b.dataset.vf!=='bad'),pend=blks.map((b,k)=>b.dataset.noau==='1'&&!okAi[k]),soft=LKM==='two'&&okAi.some(x=>!x);
+ const okAi=blks.map(b=>b.querySelector('.tr').classList.contains('ai')&&b.dataset.vf!=='bad'),pend=blks.map((b,k)=>b.dataset.noau==='1'&&!okAi[k]),soft=LKM==='two'&&(pend.some(Boolean)||(gOn&&!!aiKey()&&!llmOn()));
  pset('pl:'+key+':'+pos,{p,h,ai,pend,soft,auto:!!auto,gv:gver,at:Date.now()});
  pliSetK(key,pos,auto,true,soft);markBM();
  return true;
@@ -3061,7 +3058,7 @@ async function autoLockAhead(k0,p,ps,hs,pendIdx){
  if(H.some(x=>!x))return;
  if(LKM==='ai'&&!A.every(x=>x))return;
  for(let i=0;i<ps.length;i++){const hh=P[i];if((A[i]||!aiFinal())&&await pget('au:'+hh)==null&&!(await pget('lk:'+hh))&&await pget('mp:'+hh)==null)pset('au:'+hh,{h:H[i],ai:A[i],gv:gver,at:Date.now()})}
- const soft=LKM==='two'&&!A.every(x=>x);
+ const soft=LKM==='two'&&(!!(pendIdx&&pendIdx.size)||(gOn&&!!aiKey()&&!llmOn()));
  pset('pl:'+k0+':'+p,{p:P,h:H,ai:A,pend:P.map((_,i)=>!!(pendIdx&&pendIdx.has(i))),soft,auto:true,gv:gver,at:Date.now()});pliSetK(k0,p,true,true,soft);
 }
 async function lockRange(from,to,prog){
@@ -3254,7 +3251,7 @@ async function upgradePend(){
    if(isPageLocked())await lockPageNow(!!(pliGet().find(x=>x.pos===pos)||{}).auto);
    markBM();setSt('✓ AI দিয়ে উন্নত করা হয়েছে'+(blks.some(b=>b.dataset.noau==='1')?' (কিছু অংশ বাকি)':''));
   }
- if(blks.some(b=>b.dataset.noau==='1'))nextUp=Date.now()+45000;}catch(e){nextUp=Date.now()+30000}
+ }catch(e){nextUp=Date.now()+30000}
  finally{upBusy=false}
 }
 // ---- যাচাই-পাস
