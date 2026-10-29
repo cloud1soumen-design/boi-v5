@@ -678,7 +678,7 @@ function attachCover(x,cv){
 }
 function showLib(){
  const l=lib();sheet.style.display='none';view.className='';
- view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ৯)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
+ view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ১১)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
  const grid=document.createElement('div');grid.className='shelf';view.append(grid);
  l.forEach(x=>{
   const card=document.createElement('div');card.className='bcard';
@@ -1254,9 +1254,9 @@ function srcHint(list){
  return s?s+'\n':'';
 }
 let ctxNow=null,WMAP=+(ls.get('wmap')||8),RECUT=ls.get('recut')!=='0',strictNext=false,fixQ=Promise.resolve();
-function gprompt(list,mark){const s=gprompt0(list);return mark?s:s.replace('\u0001','')}
-function gprompt0(list){
- const T=termTable(list);
+function gprompt(list,mark,drafts){const s=gprompt0(list,drafts);return mark?s:s.replace('\u0001','')}
+function gprompt0(list,drafts){
+ const T=termTable(list);const REFM=!!(drafts&&drafts.some(d=>d));
  return 'You are an expert human translator producing Bangla (Bengali) for a serious reader who is STUDYING this book and wants the author\'s exact ideas.\n'
  +'BOOK: '+(key?key.replace(/^pos:/,'').replace(/\d+(#pg)?$/,''):'unknown')+(gtp?'\nSUBJECT (from reader): '+gtp:'')+(bookCtx.profile?'\nBOOK PROFILE (your earlier understanding, keep following it): '+bookCtx.profile:'')+(cust.trim()?'\nREADER\'S CUSTOM INSTRUCTIONS (highest priority; follow them strictly, they override the defaults below where they differ):\n'+cust.trim():'')+'\n\n'
  +srcHint(list)+'PRIORITIES:\n'
@@ -1268,7 +1268,7 @@ function gprompt0(list){
   :'4. Technical/subject terms: be consistent everywhere. (a) Keep in English letters any term whose Bangla would blur or change the meaning; on its first occurrence in this input add the Bangla meaning in brackets, e.g. liquidity (তরলতা), then use the English alone. (b) Use plain Bangla for ordinary words and terms with a standard exact Bangla equivalent. (c) Always keep acronyms, names, brands, code, formulas and numbers as they are.\n')
  +'5. If a paragraph is already Bangla, keep its wording and only fix English words/terms inside it by rule 4. Keep headings short and list formatting. If a source paragraph contains line breaks (new lines), keep exactly the same line breaks in the Bangla text: one source line becomes one Bangla line, with no merging.\n'
  +(strictNext?'STRICT MODE: a previous attempt omitted part of the text. Translate EVERY sentence, including analogies, examples and comparisons; do not summarise, compress or skip anything.\n':'')
-+'\nOUTPUT: one JSON object only, with keys:\n'
++(REFM?'REFINE MODE: each paragraph also has a "draft", a machine translation in which the approved glossary terms are already in place. The source text is the authority and the draft is only your starting point. Produce the FINAL Bangla: correct every mistranslation, wrong term, omission or addition; repair broken sentence structure and unclear pronoun references; and polish the wording until it reads as elegant, natural Bangla written by a skilled human translator, never like machine output. Keep every term from ALWAYS USE THESE TRANSLATIONS exactly in its listed Bangla form. Only if a draft is ALREADY fully accurate AND already reads as natural, elegant Bangla, return exactly "=" as its t and omit its w (this saves time). When in doubt, return the improved text, never "=".\n':'')+'\nOUTPUT: one JSON object only, with keys:\n'
  +'"translations": array of objects {"i":number,"t":"Bangla text"}, one for EVERY input paragraph i (1 to N, where N is the number of input paragraphs), nothing skipped or merged. Add to each object "w": up to '+WMAP+' pairs [Bangla word exactly as written in your t, the exact English word or short phrase it translates from that source paragraph] for the important content words (nouns, verbs, adjectives, terms); skip function words.\n'
  +'"new_terms": up to 10 important technical terms from this input that are NOT in the lists above, each {"en":"term","bn":"Bangla word you used OR KEEP_EN"}.\n'
  +(bookCtx.profile?'':'"profile": 2-3 sentences describing the book\'s subject, tone and likely audience.\n')
@@ -1279,7 +1279,7 @@ function gprompt0(list){
  +(T.sug.length?'SUGGESTED TRANSLATIONS (not verified by the reader; use them if they fit the context, otherwise choose the better rendering): '+T.sug.join('; ')+'\n':'')
  +(gPrev?'\nPREVIOUS TRANSLATED TEXT (for continuity of voice and terms only; do not repeat it):\n'+gPrev+'\n':'')
  +(ctxNow&&list.length===1?'CONTEXT (do NOT translate this; use it only to understand the paragraph below):\n'+(ctxNow.prev?'PREVIOUS PARAGRAPH: '+ctxNow.prev+'\n':'')+(ctxNow.next?'NEXT PARAGRAPH: '+ctxNow.next+'\n':'')+'\n':'')
-+'\nPARAGRAPHS (JSON array of {i,text}):\n'+JSON.stringify(list.map((t,k)=>({i:k+1,text:t})));
++'\nPARAGRAPHS (JSON array of {i,text'+(REFM?',draft':'')+'}):\n'+JSON.stringify(list.map((t,k)=>({i:k+1,text:t,draft:(drafts&&drafts[k])?drafts[k]:undefined})));
 }
 const TOKRE=/[⟦\[［【〔⟪<«]\s*G\s*(\d{1,3})\s*[⟧\]］】〕⟫>»]/g;
 function normTok(t){return String(t).replace(TOKRE,(m,i)=>'⟦G'+i+'⟧')}
@@ -1308,11 +1308,11 @@ function restoreAI(t,toks){
 }
 function restoreLoose(t,toks){return t.replace(/⟦\s*G(\d+)\s*⟧/g,(m,i)=>toks&&toks[+i]?toks[+i].txt:'')}
 const inPara=(en,para)=>{const p=para.toLowerCase(),e=String(en).toLowerCase().trim();if(!e)return false;if(p.includes(e))return true;const ws=(e.match(/[a-z][a-z'’-]*/g)||[]).filter(w=>!STOP.has(w));return ws.length>0&&ws.every(w=>p.includes(stemE(w)))};
-async function callBatch(list,orig,prio){
+async function callBatch(list,orig,prio,drafts){
  orig=orig||list;
  let lastErr=null;
  for(let t=0;t<2;t++){
-  const res=await llm(gprompt(list),undefined,prio);
+  const res=await llm(gprompt(list,false,drafts),undefined,prio);
   const arr=Array.isArray(res)?res:(res&&res.translations);
   const o=new Array(list.length).fill(null);
   if(Array.isArray(arr))arr.forEach((x,k)=>{
@@ -1341,8 +1341,10 @@ const pmem=new Map();
 async function pget(k){if(pmem.has(k))return pmem.get(k);const c=await kvGet(k);if(c!=null)pmem.set(k,c);return c}
 function pset(k,v){pmem.set(k,v);kvSet(k,v)}
 const pk=t=>'gp:'+hk(t+'|'+gver+'|'+gtp+reg+(noEn?1:0)+'|'+hk(cust));
-async function gemTr(list,max,prio){
- max=max||3500;prio=prio||0;
+let REF=ls.get('ref')==='1';
+const h2t=h=>{try{const d=document.createElement('div');d.innerHTML=String(h||'');return (d.textContent||'').replace(/\s+/g,' ').trim()}catch(e){return ''}};
+async function gemTr(list,max,prio,drafts){
+ max=max||3500;prio=prio||0;const REFON=!!(drafts&&REF);if(REFON)drafts=drafts.map((d,k)=>(d&&!cutCheck(list[k],d))?d:'');const isEq=t=>/^\s*[=＝]\s*$/.test(String(t));
  const out=new Array(list.length).fill(null),miss=[];
  for(let k=0;k<list.length;k++){const c=await pget(pk(list[k]));if(c!=null)out[k]=cleanTok(c,list[k]);else miss.push(k)}
  let i=0,shrink=Infinity;
@@ -1350,12 +1352,12 @@ async function gemTr(list,max,prio){
   const idx=[];let n=0;const cap=Math.min(shrink,curProv()==='gro'?Math.min(max,LM.gro.batch||1800):max);
   while(i<miss.length&&(!idx.length||n+list[miss[i]].length<cap)){idx.push(miss[i]);n+=list[miss[i]].length;i++}
   curChars=n;
-  const pr=idx.map(k=>protect(list[k],'ai'));
+  const pr=idx.map(k=>REFON?{t:list[k],toks:[]}:protect(list[k],'ai'));
   let raw;
-  try{raw=await callBatch(pr.map(x=>x.t),idx.map(k=>list[k]),prio)}catch(e){if(e.big&&cap>700){shrink=Math.max(600,Math.floor(cap/2));i-=idx.length;continue}throw e}
-  const res=raw.map((t,j)=>t==null?null:restoreAI(t,pr[j].toks));
+  try{raw=await callBatch(pr.map(x=>x.t),idx.map(k=>list[k]),prio,REFON?idx.map(k=>drafts[k]||''):undefined)}catch(e){if(e.big&&cap>700){shrink=Math.max(600,Math.floor(cap/2));i-=idx.length;continue}throw e}
+  const res=raw.map((t,j)=>t==null?null:(REFON&&isEq(t)?(drafts[idx[j]]||null):restoreAI(t,pr[j].toks)));
   const lost=[];
-  raw.forEach((t,j)=>{if(t!=null&&(res[j]==null||!String(res[j]).trim()))lost.push(j)});
+  raw.forEach((t,j)=>{if(t!=null&&!(REFON&&isEq(t))&&(res[j]==null||!String(res[j]).trim()))lost.push(j)});
   if(lost.length){
    // চিহ্ন হারালে বাড়তি AI-কল নয় (কোটা বাঁচে): যা পাওয়া গেছে তা বসিয়ে নিই, শব্দকোষ শুধু সহায়ক
    lost.forEach(j=>{if((res[j]==null||!String(res[j]).trim())&&raw[j]!=null)res[j]=restoreLoose(normTok(raw[j]),pr[j].toks)});
@@ -1558,7 +1560,7 @@ async function hybridAI(blks,my){
  if(!sel.length){setSt('✓ Google Translate'+(todo.length<blks.length?' + জমা AI অংশ (✨)':(hyPct<=0?' (AI ০% সেট করা)':' (সবই সহজ, AI লাগেনি)')));return}
  setSt('✓ Google · ⏳ '+sel.length+'টি কঠিন অংশ '+provName()+'-এ উন্নত হচ্ছে…');
  try{
-  const res=await gemTr(sel.map(b=>b.querySelector('.o').textContent),3500);
+  const res=await gemTr(sel.map(b=>b.querySelector('.o').textContent),3500,0,REF?sel.map(b=>{try{return curText(b)}catch(e){return ''}}):undefined);
   if(my!==tok)return;
   sel.forEach((b,k)=>{if(res[k]!=null)applyAI(b,res[k]);else b.dataset.noau='1'});
   setSt('✓ Google + AI ('+provName()+') — ✨ চিহ্নিত অংশ AI-র করা');
@@ -1654,12 +1656,30 @@ $('#bAuto').onclick=()=>{
 $('#bAuto').textContent='⇄ অনুবাদ '+(auto?'চালু':'বন্ধ');
 $('#bTerm').onclick=()=>run(()=>termList(paras.join('\n').slice(0,8000)));
 let chatFlat=[];
+function gptTplDefault(){return 'Translate the {{COUNT}} book paragraph(s) below into Bangla ({{STYLE}}), faithful to the meaning, fluent and natural.{{SUBJECT}}{{INSTRUCTIONS}}{{TECHNICAL}}{{GLOSSARY}}\n\nReply with ONLY the Bangla translation: exactly {{COUNT}} paragraph(s), in the same order and in the same layout as the source, separated by one blank line. Do not add numbers, markers, headings, notes or explanations, and never merge or split paragraphs. After the last paragraph add a line "TERMS:" then up to 10 key technical terms from this text, one per line as "english = Bangla word you used (or KEEP_EN)"{{PROFILEASK}}.\n\n{{PARAGRAPHS}}'}
+function plainChatPrompt(idx,pr,TT){
+ const N=idx.length,body=pr.map(x=>x.t).join('\n\n');
+ if(ls.get('gshort')==='0'){
+  const g=gprompt(pr.map(x=>x.t),true);
+  const head=g.slice(0,g.indexOf('\nOUTPUT:'))+g.slice(g.indexOf('\u0001')+1,g.indexOf('\nPARAGRAPHS (JSON array'));
+  return head+'\nOUTPUT FORMAT: plain text only (no JSON, no markdown, no numbers, no markers). Write exactly '+N+' Bangla paragraph(s), one for each source paragraph, in the same order and the same layout as the source, separated by one blank line; never merge or split paragraphs. After the last paragraph add a line "TERMS:" followed by up to 15 important technical terms from this input that are NOT in the lists above, one per line as "english term = Bangla word you used (or KEEP_EN)"'+(bookCtx.profile?'':'. Then a final line "PROFILE:" followed by 2-3 sentences describing the book subject, tone and likely audience')+'.\n\nPARAGRAPHS:\n'+body;
+ }
+ const cu=(ls.get('custs')===null?DEF_CUSTS:ls.get('custs')).trim();
+ const vars={COUNT:String(N),STYLE:reg==='wb'?'West Bengal, Kolkata style':reg==='bd'?'Bangladeshi standard':'standard',
+  SUBJECT:gtp?' Subject of the book: '+gtp+'.':'',INSTRUCTIONS:cu?' '+cu:'',TECHNICAL:noEn?' Technical terms: Bangla script with the English in brackets on first use.':'',GLOSSARY:TT,
+  PROFILEASK:bookCtx.profile?'':' and a final line "PROFILE:" with 2 sentences on the subject and tone of the book',PARAGRAPHS:body};
+ let tpl=ls.get('gtpl');if(!tpl||!tpl.trim())tpl=gptTplDefault();
+ let o=tpl.replace(/\{\{(\w+)\}\}/g,(m,k)=>(k in vars)?vars[k]:m);
+ if(!/\{\{PARAGRAPHS\}\}/.test(tpl))o+='\n\n'+body;
+ return o;
+}
 function chatPrompt(idx){
  // ChatGPT-র জন্য সংকেত (⟦G0⟧) নয়: সাধারণ মূল লেখা + শব্দকোষের শব্দের আলাদা তালিকা
  const pr=idx.map(k=>({t:paras[k],toks:[]}));
  chatFlat=[];
  const T=termTable(idx.map(k=>paras[k]));
  const TT=(T.map.length?' Use exactly these Bangla renderings for these terms: '+T.map.join('; ')+'.':'')+(T.keep.length?' Keep these terms in English as written: '+T.keep.join(', ')+'.':'')+(T.sug.length?' Suggested renderings (use them if they fit the context): '+T.sug.join('; ')+'.':'');
+ if(ls.get('gplain')!=='0')return plainChatPrompt(idx,pr,TT);
  if(ls.get('gshort')!=='0'){
   return 'Translate these book paragraphs into Bangla ('+(reg==='wb'?'West Bengal, Kolkata style':'standard')+'), faithful to the meaning, fluent and natural.'+((ls.get('custs')===null?DEF_CUSTS:ls.get('custs')).trim()?' '+(ls.get('custs')===null?DEF_CUSTS:ls.get('custs')).trim():'')+(noEn?' Technical terms: Bangla script with the English in brackets on first use.':'')+TT+' Reply with only the translations, each starting with its marker exactly as given (e.g. [12]). After the last paragraph add a line "TERMS:" then up to 10 key technical terms from this text, one per line as "english = Bangla word you used (or KEEP_EN)"'+(bookCtx.profile?'':' and a final line "PROFILE:" with 2 sentences on the book\'s subject and tone')+'.\n\n'+idx.map((k,j)=>'['+(k+1)+'] '+pr[j].t).join('\n\n');
  }
@@ -1786,6 +1806,16 @@ function showAsk(job,txt){
 }
 const D2A=x=>x.replace(/[০-৯]/g,c=>'০১২৩৪৫৬৭৮৯'.indexOf(c));
 function parseItems(body,job){
+ if(job.plain&&job.idx.length>1){
+  const cl0=x=>x.replace(/^[\s*:：.\-]+|[\s*]+$/g,'');
+  const bl=body.split(/\n\s*\n/).map(cl0).filter(Boolean);
+  if(bl.length===job.idx.length){
+   const nm=bl.map(x=>/^\s*(?:\*\*)?([0-9০-৯]+)[.)]\s*/.exec(x));
+   const seq=nm.every((m,k)=>m&&+D2A(m[1])===k+1);
+   const bl2=seq?bl.map(x=>cl0(x.replace(/^\s*(?:\*\*)?[0-9০-৯]+[.)]\s*/,''))):bl;
+   return {list:bl2.map((t,k)=>({idx:job.idx[k],t})),found:0};
+  }
+ }
  const re=/[\[【]\s*\**\s*([0-9০-৯]+)\s*\**\s*[\]】]/g,marks=[];let m;
  while((m=re.exec(body)))marks.push({n:+D2A(m[1]),i:m.index,e:re.lastIndex});
  const clean=t=>t.replace(/^[\s*:：.\-]+|[\s*]+$/g,'');
@@ -1833,9 +1863,9 @@ function applyGpt(txt,auto){
   const raw=restoreLoose(body.trim(),gptJob.flat||[]);
   if(raw.trim()&&gptJob.key&&(force||(raw.length>=20&&bn(raw)>0&&bn(raw)>=lat(raw)*0.3))){
    pset('pgmp:'+gptJob.key+':'+gptJob.pos,raw);
-   const same=gptJob.key===key&&gptJob.pos===pos;
+   const same=gptJob.key===key&&gptJob.pos===pos,nExp=gptJob.idx.length;
    gptJob=null;gbar(false);sheet.style.display='none';
-   toast('✅ ChatGPT-র উত্তর হুবহু পুরো পাতার অনুবাদ কার্ড হিসেবে বসেছে (অনুচ্ছেদ ধরে ভাগ করা যায়নি)',6000);
+   toast('✅ ChatGPT-র উত্তর হুবহু পুরো পাতার অনুবাদ কার্ড হিসেবে বসেছে (অনুচ্ছেদ ধরে ভাগ করা যায়নি'+(pi.blocks?': উত্তরে '+pi.blocks+'টি অনুচ্ছেদ, আশা ছিল '+nExp+'টি':'')+')',6000);
    if(same)loadPageCard();
    return true;
   }
@@ -1903,17 +1933,27 @@ $('#gx').onclick=()=>{gptJob=null;gbar(false)};
 const clipAuto=()=>{if(document.visibilityState==='visible'&&gptJob){tryClip(true);setTimeout(()=>{if(gptJob)tryClip(true)},900)}};
 document.addEventListener('visibilitychange',clipAuto);
 addEventListener('focus',()=>{if(gptJob)tryClip(true)});
+function showPromptEdit(txt,go){
+ sheet.style.display='flex';
+ out.innerHTML='<b>✏️ ChatGPT-তে যাওয়া প্রম্পট</b><div style="font-size:13px;color:var(--mut);margin:4px 0">দরকার মতো বদলে নিন, তারপর কপি করে ChatGPT খুলুন। অনুচ্ছেদগুলো এই লেখার ভেতরেই আছে, ওগুলো না মুছে শুধু নির্দেশ বদলান।</div><textarea class="gi" id="gpe" rows="14"></textarea><div style="margin-top:8px"><button class="p" id="gpok">✅ কপি করে ChatGPT খুলুন</button> <button id="gpno">বাতিল</button></div>';
+ $('#gpe').value=txt;
+ $('#gpok').onclick=()=>{const t=$('#gpe').value;sheet.style.display='none';go(t)};
+ $('#gpno').onclick=()=>{gptJob=null;sheet.style.display='none'};
+}
 $('#bGpt').onclick=async()=>{
  if(!book||!paras.length){toast('আগে একটা বই খুলুন');return}
  const g=await nextGroup();
  if(!g){toast('✅ এই পাতার সব অংশ ChatGPT-র অনুবাদে আছে');return}
- const txt=chatPrompt(g.idx);
- gptJob={snap:paras.slice(),idx:g.idx.slice(),flat:chatFlat,pos:pos,key:key};
+ const txt0=chatPrompt(g.idx);
+ gptJob={snap:paras.slice(),idx:g.idx.slice(),flat:chatFlat,pos:pos,key:key,plain:ls.get('gplain')!=='0'};
+ const go=async txt=>{
  const copied=await copyText(txt);lastPrompt=txt;
  const pre=openChat(txt,ls.get('gmode')||'web');
  if(!copied)showPromptBox(txt);
  gbar(true);
  toast((g.hard?'⭐ কঠিন '+g.idx.length+'টি অংশ। ':'')+(pre?'ChatGPT খুলছে, প্রম্পট বসানো থাকবে। না থাকলে পেস্ট করুন।':(copied?'প্রম্পট কপি হয়েছে (লম্বা বলে আগে থেকে বসানো যায়নি)। ChatGPT না খুললে ওপরের 📱/🌐 বোতাম চাপুন, তারপর বার্তার ঘরে চেপে ধরে Paste করে পাঠান।':'অটো কপি হয়নি, নিচের ঘরে ম্যানুয়ালি করুন।')),6000);
+ };
+ if(ls.get('gedit')==='1')showPromptEdit(txt0,go);else await go(txt0);
 };
 let preStop=false;
 $('#bOff').onclick=()=>{
@@ -2043,7 +2083,7 @@ $('#bGl').onclick=()=>{
  +'<label style="display:block;margin:6px 0"><input type="checkbox" id="gon"> AI অনুবাদ চালু করুন (key লাগবে)</label>'
  +'<select class="gi" id="gp"><option value="gemini">AI: Gemini (ফ্রি key)</option><option value="claude">AI: Claude (নিজের API key, পেইড)</option><option value="oai">AI: ChatGPT / Groq / OpenRouter (API key)</option></select>'
  +'<select class="gi" id="hy"><option value="1">পদ্ধতি: মিশ্র — Google ৮০% + AI ২০% (কঠিন অংশে), দ্রুত</option><option value="0">পদ্ধতি: শুধু AI — সেরা মান, ধীর, বেশি কোটা</option></select>'
- +'<div style="margin-top:6px"><b id="hyl"></b><input type="range" id="hyp" min="0" max="100" step="5" style="width:100%"><span style="font-size:13px;color:var(--mut)">স্লাইডার ডানে নিলে বেশি অংশ AI-তে যাবে (মান বাড়ে, কোটা বেশি লাগে), বাঁয়ে নিলে বেশি Google (দ্রুত, কোটা বাঁচে)। AI সবচেয়ে কঠিন অংশগুলোই আগে পায়। শুধু "মিশ্র" পদ্ধতিতে কাজ করে।</span></div>'
+ +'<div style="margin-top:6px"><label style="display:block;margin:6px 0"><input type="checkbox" id="ref"> ✍️ <b>AI খসড়া সংশোধন</b> (মিশ্র পদ্ধতিতে ও আগাম পাতায়: Google-এর খসড়া আগে দেখায়, AI মূলের সাথে মিলিয়ে সেটা ঠিক ও সুন্দর করে। যেটা আগেই নির্ভুল ও সুন্দর, তার জন্য AI শুধু ‘=’ লেখে, তাই দ্রুত। শব্দকোষের চিহ্ন লাগে না। ইনপুট-টোকেন কিছুটা বাড়ে, অনুরোধের সংখ্যা বাড়ে না)</label><b id="hyl"></b><input type="range" id="hyp" min="0" max="100" step="5" style="width:100%"><span style="font-size:13px;color:var(--mut)">স্লাইডার ডানে নিলে বেশি অংশ AI-তে যাবে (মান বাড়ে, কোটা বেশি লাগে), বাঁয়ে নিলে বেশি Google (দ্রুত, কোটা বাঁচে)। AI সবচেয়ে কঠিন অংশগুলোই আগে পায়। শুধু "মিশ্র" পদ্ধতিতে কাজ করে।</span></div>'
  +'<select class="gi" id="reg"><option value="wb">বাংলা: পশ্চিমবঙ্গ (জল, স্নান…)</option><option value="bd">বাংলা: বাংলাদেশ (পানি, গোসল…)</option><option value="n">বাংলা: নিরপেক্ষ</option></select>'
  +'<input class="gi" id="gk" type="password" placeholder="Gemini API key" autocomplete="off">'
  +'<input class="gi" id="gm" placeholder="Gemini মডেলের নাম">'
@@ -2090,7 +2130,7 @@ $('#bGl').onclick=()=>{
  +'<input class="gi" id="gcl" placeholder="নিজের ChatGPT চ্যাট লিংক (ঐচ্ছিক, খালি রাখলে নতুন চ্যাট)">'
  +'<select class="gi" id="gscope"><option value="page">ChatGPT-তে পাঠাবে: পুরো পাতা (ছোট ছোট অংশে)</option><option value="hard">ChatGPT-তে পাঠাবে: শুধু কঠিন অংশ</option></select>'
  +'<label style="display:block;margin:6px 0"><input type="checkbox" id="gsh"> ChatGPT-তে সংক্ষিপ্ত প্রম্পট পাঠান (শুধু ইংরেজি অংশ + অনুবাদের অনুরোধ। নিজের নির্দেশনা ChatGPT-র Custom Instructions-এ একবার বসিয়ে রাখুন। ডিফল্ট চালু)</label>'
- +'<input class="gi" id="custs" placeholder="ChatGPT-র জন্য ছোট নির্দেশনা (ইংরেজিতে, প্রম্পটের সঙ্গে যাবে)">'
+ +'<input class="gi" id="custs" placeholder="ChatGPT-র জন্য ছোট নির্দেশনা (ইংরেজিতে, প্রম্পটের সঙ্গে যাবে)"><label style="display:block;margin:6px 0"><input type="checkbox" id="gplain"> ChatGPT-তে অনুচ্ছেদ-নম্বর ছাড়া, বইয়ের মতো সাধারণ অনুচ্ছেদ পাঠান (ChatGPT একই ক্রমে ফাঁকা লাইন দিয়ে অনুচ্ছেদ ফেরত দেবে। ডিফল্ট চালু)</label><label style="display:block;margin:6px 0"><input type="checkbox" id="gedit"> ChatGPT-তে পাঠানোর আগে প্রতিবার প্রম্পট দেখে সম্পাদনা করব</label><div style="margin-top:6px"><b>✏️ ChatGPT প্রম্পট টেমপ্লেট</b> (খালি থাকলে ডিফল্ট চলবে)</div><textarea class="gi" id="gtpl" rows="9" placeholder="খালি = ডিফল্ট প্রম্পট। নিচের বোতাম চেপে ডিফল্ট লেখাটা এনে বদলাতে পারেন।"></textarea><button id="gtplf">📝 ডিফল্ট প্রম্পট এখানে আনুন</button> <button id="gtplr">↩ ডিফল্টে ফেরান</button><div style="font-size:12px;color:var(--mut);margin:4px 0">বসানো যায় এমন চিহ্ন: {{COUNT}} অনুচ্ছেদ-সংখ্যা, {{STYLE}} বাংলার ধরন, {{SUBJECT}} বইয়ের বিষয়, {{INSTRUCTIONS}} ছোট নির্দেশনা, {{TECHNICAL}} পরিভাষার নিয়ম, {{GLOSSARY}} শব্দকোষের শব্দ, {{PROFILEASK}} প্রোফাইল চাওয়া, {{PARAGRAPHS}} অনুচ্ছেদগুলো। {{PARAGRAPHS}} না থাকলে অনুচ্ছেদ শেষে জুড়ে যায়। এই টেমপ্লেট শুধু নম্বর-ছাড়া পদ্ধতিতে কাজ করে।</div>'
  +'<div id="bp" style="margin:6px 0;font-size:15px;color:var(--mut)"></div>'
  +'<button class="p" id="gs">সেভ করুন</button> <button id="gc">বন্ধ করুন</button> <button id="gtest">🔌 Gemini পরীক্ষা</button> <button id="gpst">📥 ChatGPT-র উত্তর পেস্ট করুন</button> <button id="wzgo">🧭 সেটআপ গাইড</button> <button id="inst">📲 ইনস্টল পরীক্ষা</button> <button id="bpr">প্রোফাইল রিসেট</button> <button id="bpi">📥 AI-র শেখা টার্ম শব্দকোষে নিন</button> <button id="vbump">🔄 সব AI অনুবাদ নতুন করে</button> <button id="pgre">🔄 শুধু এই পাতা আবার</button><div id="gres" style="margin-top:6px"></div>';
  $('#gt').value=gl.map(g=>g.bn?g.en+' = '+g.bn:g.en).join('\n');
@@ -2153,7 +2193,13 @@ $('#bGl').onclick=()=>{
  $('#pgre').onclick=()=>{paras.forEach(p=>{const k=pk(p),k2='mp:'+hk(p);pmem.delete(k);kvDel(k);pmem.delete(k2);kvDel(k2)});plDelete(key,pos);toast('এই পাতার জমা অনুবাদ ও পাতা-লক মুছেছে, নতুন করে হচ্ছে',4000);sheet.style.display='none';if(book)translateAll()};
  $('#vbump').onclick=()=>{gver++;ls.set('gver',String(gver));toast('পরের অনুবাদ থেকে AI সবকিছু নতুন করে করবে (আগের জমা বাদ)',5000)};
  $('#bpr').onclick=()=>{bookCtx={profile:'',terms:{}};glRe=null;if(key)kvSet('bc:'+key,bookCtx);bpShow();toast('প্রোফাইল রিসেট হয়েছে')};
- $('#glu').value=glu;$('#glauto2').checked=glAuto2;$('#glrev').checked=glRev;$('#glrev').onchange=e=>{glRev=e.target.checked;ls.set('glrev',glRev?'1':'0')};$('#glpend').textContent='📝 অপেক্ষমাণ শব্দ যাচাই ('+glPend.length+')';$('#glpend').onclick=openGlReview;$('#gli').textContent=glInfoTxt();
+ $('#glu').value=glu;$('#glauto2').checked=glAuto2;$('#glrev').checked=glRev;if($('#gplain')){
+ $('#gplain').checked=ls.get('gplain')!=='0';$('#gplain').onchange=e=>ls.set('gplain',e.target.checked?'1':'0');
+ $('#gedit').checked=ls.get('gedit')==='1';$('#gedit').onchange=e=>ls.set('gedit',e.target.checked?'1':'0');
+ $('#gtpl').value=ls.get('gtpl')||'';$('#gtpl').oninput=e=>ls.set('gtpl',e.target.value);
+ $('#gtplf').onclick=()=>{$('#gtpl').value=gptTplDefault();ls.set('gtpl',$('#gtpl').value)};
+ $('#gtplr').onclick=()=>{$('#gtpl').value='';ls.set('gtpl','')};
+}if($('#ref')){$('#ref').checked=REF;$('#ref').onchange=e=>{REF=e.target.checked;ls.set('ref',REF?'1':'0')}}$('#glrev').onchange=e=>{glRev=e.target.checked;ls.set('glrev',glRev?'1':'0')};$('#glpend').textContent='📝 অপেক্ষমাণ শব্দ যাচাই ('+glPend.length+')';$('#glpend').onclick=openGlReview;$('#gli').textContent=glInfoTxt();
  $('#glall').onclick=async()=>{const m=$('#gli');m.textContent='⏳ সব বই খোঁজা হচ্ছে…';try{const r=await allBookTerms();m.textContent=glRev?('✅ '+r.books+'টি বই থেকে '+r.n+'টি নতুন শব্দ যাচাইয়ের তালিকায় এসেছে। যাচাই করে যোগ করুন।'):('✅ '+r.books+'টি বই থেকে '+r.n+'টি নতুন শব্দ শব্দকোষে এসেছে (পর্যালোচনার জন্য চিহ্নিত)');if(glRev&&glPend.length)setTimeout(openGlReview,300);const t=$('#gt');if(t)t.value=gl.map(g=>g.bn?g.en+' = '+g.bn:g.en).join('\n')}catch(e){m.textContent='❌ '+(e.message||e)}};
  $('#glout').onclick=async()=>{await out1('my-glossary.txt','# আমার কমন শব্দকোষ — প্রতি লাইনে English = বাংলা\n# নিজের repository-তে তুললে সব বই ও ডিভাইসে একই শব্দকোষ চলবে। যাচাই করা হলে নিচে একটা লাইনে # trusted লিখে দিন।\n'+glossTXT(),'text/plain;charset=utf-8');toast('my-glossary.txt নামানো হয়েছে',4000)};
  $('#glf').onclick=async()=>{
@@ -2872,7 +2918,7 @@ async function aheadPump(){
     else ps.forEach((q,k)=>{if(!lockedK.has(k))wantAI.add(k)});
    }
    if(wantAI.size){
-    try{const c0=aiCalls;await gemTr([...wantAI].map(k=>ps[k]),3500,1);if(aiCalls>c0)await sleepMs(gp==='gemini'?5000:1200)}
+    try{const c0=aiCalls;await gemTr([...wantAI].map(k=>ps[k]),3500,1,REF?[...wantAI].map(k=>h2t(hs[k])):undefined);if(aiCalls>c0)await sleepMs(gp==='gemini'?5000:1200)}
     catch(e){if(!isRetryErr(e)&&!e.rl)wantAI.clear()}
    }
    if(my!==aheadTok)return;
@@ -3244,7 +3290,7 @@ async function upgradePend(){
  try{
   setSt('⬆ AI পাওয়া গেছে — বাকি '+blks.length+'টি অনুচ্ছেদ উন্নত করা হচ্ছে…');
   if(blks.length===1)ctxNow=await ctxFor(blks[0].querySelector('.o').textContent);
-  const out=await gemTr(blks.map(b=>b.querySelector('.o').textContent),3500,0);ctxNow=null;
+  const out=await gemTr(blks.map(b=>b.querySelector('.o').textContent),3500,0,REF?blks.map(b=>{try{return curText(b)}catch(e){return ''}}):undefined);ctxNow=null;
   if(pos===p0&&key===k0){
    blks.forEach((b,k)=>{if(out[k]!=null){applyAI(b,out[k]);b.dataset.noau='';try{b.dataset.sy=conflictsFor(b.querySelector('.o').textContent,curText(b)).length?'1':''}catch(e){}}});
    await lockParas([...view.querySelectorAll('.blk')]);
