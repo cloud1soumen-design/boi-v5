@@ -678,7 +678,7 @@ function attachCover(x,cv){
 }
 function showLib(){
  const l=lib();sheet.style.display='none';view.className='';
- view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ১১.২)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
+ view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ১১.৪)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
  const grid=document.createElement('div');grid.className='shelf';view.append(grid);
  l.forEach(x=>{
   const card=document.createElement('div');card.className='bcard';
@@ -1843,10 +1843,10 @@ function applyGpt(txt,auto){
  const body=cutAt!==undefined?txt.slice(0,cutAt):txt;
  const termsT=iT>=0?txt.slice(iT,iP>iT?iP:undefined).replace(/^[^:]*:/,''):'';
  const profT=iP>=0?txt.slice(iP,iT>iP?iT:undefined).replace(/^[^:]*:/,'').replace(/[*]+/g,'').trim():'';
- const pi=parseItems(body,gptJob);let ok=0;const saved=[];
+ const jKey=gptJob.key,jPos=gptJob.pos;const pi=parseItems(body,gptJob);let ok=0;const saved=[];
  pi.list.forEach(({idx,t})=>{
   const tt=t?restoreLoose(t,gptJob.flat||[]):t;
-  if(tt&&gptJob.snap[idx]!==undefined&&(force||(bn(tt)>0&&bn(tt)>=lat(tt)*0.3))){pset('mp:'+hk(gptJob.snap[idx]),tt);saved.push(tt);ok++}
+  if(tt&&gptJob.snap[idx]!==undefined&&(force||(bn(tt)>0&&bn(tt)>=lat(tt)*0.3))){const hh2=hk(gptJob.snap[idx]);pset('mp:'+hh2,tt);pset('au:'+hh2,{h:esc(tt),ai:true,gv:gver,at:Date.now(),gpt:true});pset('vf:'+hh2,{t:Date.now()});saved.push(tt);ok++}
  });
  if(ok){
   if(gptJob.key!=null&&gptJob.pos!=null)plDelete(gptJob.key,gptJob.pos);
@@ -1874,7 +1874,7 @@ function applyGpt(txt,auto){
  }
  gptJob=null;gbar(false);sheet.style.display='none';
  toast('✅ ChatGPT-র '+ok+'টি অনুবাদ সেভ হয়েছে। বাকি থাকলে 💬 আবার চাপুন',5000);
- if(book)translateAll();
+ if(book){const tp=translateAll();if(jKey===key&&jPos===pos&&RS.autolock!==false&&tp&&tp.then)tp.then(()=>lockPageNow(false)).catch(()=>{})}
  return true;
 }
 async function tryClip(auto){
@@ -2190,7 +2190,7 @@ $('#bGl').onclick=()=>{
  $('#gpst').onclick=()=>openPaste();
  $('#wzgo').onclick=()=>showWiz(1);$('#inst').onclick=openInstall;
  $('#bpi').onclick=()=>{if(glRev){const q=queueTerms(bookCtx.terms,'এই বইয়ের AI-শেখা');if(q||glPend.length)openGlReview();else toast('নতুন কোনো টার্ম নেই',3000);return}let n=0;Object.entries(bookCtx.terms).forEach(([en,b])=>{if(!gl.some(g=>g.en.toLowerCase()===en)){gl.push(Object.assign(/^keep_?en$/i.test(b)?{en}:{en,bn:b},{rv:true,src:'AI-র শেখা'}));n++}});saveGl();const t=$('#gt');if(t)t.value=gl.map(g=>g.bn?g.en+' = '+g.bn:g.en).join('\n');toast(n+'টি টার্ম শব্দকোষে যোগ হয়েছে',4000)};
- $('#pgre').onclick=()=>{paras.forEach(p=>{const k=pk(p),k2='mp:'+hk(p);pmem.delete(k);kvDel(k);pmem.delete(k2);kvDel(k2)});plDelete(key,pos);toast('এই পাতার জমা অনুবাদ ও পাতা-লক মুছেছে, নতুন করে হচ্ছে',4000);sheet.style.display='none';if(book)translateAll()};
+ $('#pgre').onclick=async()=>{let kept=0;for(const p of paras){const k=pk(p),k2='mp:'+hk(p);if(await pget(k2)!=null){kept++;continue}pmem.delete(k);kvDel(k);pmem.delete(k2);kvDel(k2)}plDelete(key,pos);toast('এই পাতার জমা অনুবাদ ও পাতা-লক মুছেছে'+(kept?' (ChatGPT-র লক করা '+kept+'টি অনুচ্ছেদ রাখা হয়েছে; ওটা খুলতে অনুচ্ছেদের মেনুতে আবার অনুবাদ চাপুন)':'')+', নতুন করে হচ্ছে',5000);sheet.style.display='none';if(book)translateAll()};
  $('#vbump').onclick=()=>{gver++;ls.set('gver',String(gver));toast('পরের অনুবাদ থেকে AI সবকিছু নতুন করে করবে (আগের জমা বাদ)',5000)};
  $('#bpr').onclick=()=>{bookCtx={profile:'',terms:{}};glRe=null;if(key)kvSet('bc:'+key,bookCtx);bpShow();toast('প্রোফাইল রিসেট হয়েছে')};
  $('#glu').value=glu;$('#glauto2').checked=glAuto2;$('#glrev').checked=glRev;if($('#gplain')){
@@ -2562,8 +2562,8 @@ function curText(b){
 async function updChip(b){
  const h=hk(b.querySelector('.o').textContent);
  const vf=await pget('vf:'+h),lk=await pget('lk:'+h);
- b.dataset.vf=vf?'1':'';b.dataset.lk=(lk&&lk.t)?'1':'';
- b.querySelectorAll('.pm').forEach(c=>{c.textContent='⋯'+((lk&&lk.t)?' 🔒':'')+(vf?' ✔':'')+(b.dataset.sy==='1'?' ℹ':'')});
+ const mpv=(await pget('mp:'+h))!=null;b.dataset.vf=vf?'1':'';b.dataset.lk=(lk&&lk.t)?'1':'';
+ b.querySelectorAll('.pm').forEach(c=>{c.textContent='⋯'+(((lk&&lk.t)||mpv)?' 🔒':'')+(vf?' ✔':'')+(b.dataset.sy==='1'?' ℹ':'')});
 }
 function applyText(b,t){
  const d=b.querySelector('.tr');d.textContent=t;d.classList.remove('ai');fin(d,b);
@@ -3021,7 +3021,7 @@ async function syncPage(){
   b.querySelectorAll('.pm').forEach(x=>{x.textContent=x.textContent.replace(' ⚠','').replace(' ℹ','')+(c.length?' ℹ':'')});
  }
  const tl=$('#tl');
- if(tl){const base=tl.textContent.replace(/ · (✓ মিল আছে|[⚠ℹ] .*)$/,'');tl.textContent=base+(hits?(bad?' · ℹ '+bad+'টি অনুচ্ছেদে শব্দকোষের শব্দ হুবহু বসেনি (শুধু তথ্য, লক বা অনুবাদে বাধা নয়; চাইলে ☰ → 🔄 সিঙ্ক)':' · ✓ মিল আছে'):'')}
+ if(tl){const nAI=blks.filter(b=>b.querySelector('.tr').classList.contains('ai')).length;const base=tl.textContent.replace(/ · ✨ AI \d+\/\d+.*$/,'').replace(/ · (✓ মিল আছে|[⚠ℹ] .*)$/,'');tl.textContent=base+(blks.length?' · ✨ AI '+nAI+'/'+blks.length:'')+(hits?(bad?' · ℹ '+bad+'টি অনুচ্ছেদে শব্দকোষের শব্দ হুবহু বসেনি (শুধু তথ্য, লক বা অনুবাদে বাধা নয়; চাইলে ☰ → 🔄 সিঙ্ক)':' · ✓ মিল আছে'):'')}
  (VERIFY?verifyBlocks():Promise.resolve()).then(()=>{lockParas([...view.querySelectorAll('.blk')]);maybeAutoLock()});
 }
 async function openSync(){
@@ -3031,7 +3031,7 @@ async function openSync(){
  const rows=[];let badBlocks=[];
  for(const b of [...view.querySelectorAll('.blk.done')]){
   const para=b.querySelector('.o').textContent,hs=termHits(para),c=conflictsFor(para,curText(b)),eng=await engineOf(para);
-  rows.push({i:rows.length+1,eng,hs,c,b});if(c.length&&eng!=='🔒 লক')badBlocks.push(b);
+  rows.push({i:rows.length+1,eng,hs,c,b});if(c.length&&eng!=='🔒 লক'&&eng!=='ChatGPT')badBlocks.push(b);
  }
  const box=$('#syb');box.textContent='';
  const head=document.createElement('div');head.style.cssText='font-size:13px;margin:6px 0;line-height:1.6';
@@ -3114,7 +3114,7 @@ async function lockPageNow(auto){
   t.querySelectorAll('[data-base]').forEach(s=>{s.textContent=s.dataset.base;delete s.dataset.open});
   h.push(t.innerHTML);ai.push(b.querySelector('.tr').classList.contains('ai'));
  }
- const okAi=blks.map(b=>b.querySelector('.tr').classList.contains('ai')&&b.dataset.vf!=='bad'),pend=blks.map((b,k)=>b.dataset.noau==='1'&&!okAi[k]),soft=LKM==='two'&&(pend.some(Boolean)||(gOn&&!!aiKey()&&!llmOn()));
+ const okAi=blks.map(b=>b.querySelector('.tr').classList.contains('ai')&&b.dataset.vf!=='bad'),pend=blks.map((b,k)=>b.dataset.noau==='1'&&!okAi[k]),soft=LKM==='two'&&okAi.some(x=>!x);
  pset('pl:'+key+':'+pos,{p,h,ai,pend,soft,auto:!!auto,gv:gver,at:Date.now()});
  pliSetK(key,pos,auto,true,soft);markBM();
  return true;
@@ -3153,7 +3153,7 @@ async function autoLockAhead(k0,p,ps,hs,pendIdx){
  if(H.some(x=>!x))return;
  if(LKM==='ai'&&!A.every(x=>x))return;
  for(let i=0;i<ps.length;i++){const hh=P[i];if((A[i]||!aiFinal())&&await pget('au:'+hh)==null&&!(await pget('lk:'+hh))&&await pget('mp:'+hh)==null)pset('au:'+hh,{h:H[i],ai:A[i],gv:gver,at:Date.now()})}
- const soft=LKM==='two'&&(!!(pendIdx&&pendIdx.size)||(gOn&&!!aiKey()&&!llmOn()));
+ const soft=LKM==='two'&&!A.every(x=>x);
  pset('pl:'+k0+':'+p,{p:P,h:H,ai:A,pend:P.map((_,i)=>!!(pendIdx&&pendIdx.has(i))),soft,auto:true,gv:gver,at:Date.now()});pliSetK(k0,p,true,true,soft);
 }
 async function lockRange(from,to,prog){

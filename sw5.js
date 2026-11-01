@@ -1,4 +1,4 @@
-const V='brd5-v11-2',MAIN='v5.html',OPT=['manifest5.json','icon5-192.png','icon5-512.png','my-glossary.txt'];
+const V='brd5-v11-4',MAIN='v5.html',OPT=['manifest5.json','icon5-192.png','icon5-512.png','my-glossary.txt'];
 self.addEventListener('install',e=>{e.waitUntil((async()=>{const c=await caches.open(V);await c.add(MAIN);for(const f of OPT){try{await c.add(f)}catch(x){}}await self.skipWaiting()})())});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==V&&k.startsWith('brd5-')).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 self.addEventListener('fetch',e=>{
