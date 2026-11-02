@@ -676,9 +676,22 @@ function attachCover(x,cv){
   }catch(e){}
  });
 }
+function touchRead(){
+ try{
+  if(!key)return;
+  const m=JSON.parse(ls.get('lastread')||'{}'),now=Date.now();
+  if(now-(m[key]||0)<20000)return;
+  m[key]=now;
+  const ks=Object.keys(m);if(ks.length>60)ks.sort((a,b)=>m[a]-m[b]).slice(0,ks.length-60).forEach(k=>{delete m[k]});
+  ls.set('lastread',JSON.stringify(m));
+ }catch(e){}
+}
 function showLib(){
- const l=lib();sheet.style.display='none';view.className='';
- view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ১১.৪)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
+ const lr=(()=>{try{return JSON.parse(ls.get('lastread')||'{}')}catch(e){return{}}})();
+ const sortMode=ls.get('shelfsort')||'recent';
+ const l=lib().map((x,i)=>({x,i})).sort((a,b)=>sortMode==='recent'?((lr[b.x.k]||0)-(lr[a.x.k]||0)||a.i-b.i):(a.i-b.i)).map(o=>o.x);sheet.style.display='none';view.className='';
+ view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ১১.৫)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
+ if(l.length>1){const sb=document.createElement('button');sb.id='shsort';sb.textContent=sortMode==='recent'?'↕ সর্বশেষ পড়া আগে ✓ (চাপলে যোগ করার ক্রম)':'↕ যোগ করার ক্রম (চাপলে সর্বশেষ পড়া আগে)';sb.style.cssText='margin:6px 0;font-size:13px';sb.onclick=()=>{ls.set('shelfsort',sortMode==='recent'?'added':'recent');showLib()};view.append(sb)}
  const grid=document.createElement('div');grid.className='shelf';view.append(grid);
  l.forEach(x=>{
   const card=document.createElement('div');card.className='bcard';
@@ -706,7 +719,7 @@ async function show(){
  paras.forEach((t,pi)=>{const b=document.createElement('div');b.className='blk';const mm=mt[pi];if(mm){if(mm.l!=null){b.classList.add('hd','h'+(mm.l+1))}else{if(mm.li)b.classList.add('li');if(mm.q)b.classList.add('bq')}}const o=document.createElement('p');o.className='o';o.textContent=t;const d=document.createElement('p');d.className='tr';b.append(o,d);view.append(b)});
  vc();if(auto)translateAll();loadNotes();loadPageCard();
  view.style.fontSize=fs+'px';
- $('#pg').value=pos+1;ls.set(key,pos);scrollTo(0,0);
+ $('#pg').value=pos+1;ls.set(key,pos);touchRead();scrollTo(0,0);
  markBM();flashFind();scheduleHL();addImages(pos);
 }
 const go=n=>{if(!book)return;pos=Math.min(Math.max(n,0),total-1);show()};
@@ -1712,10 +1725,10 @@ async function nextGroup(){
  for(let k=0;k<paras.length;k++){if(await pget('mp:'+hk(paras[k]))==null)todo.push(k)}
  if(!todo.length)return null;
  const hard=hardSel(todo.map(k=>({k,s:hardScore(paras[k],blks[k]&&blks[k]._h)})),hyPct).map(x=>x.k).sort((a,b)=>a-b);
- const pg=(ls.get('gscope')||'page')==='page';
- const arr=pg?todo:(hard.length?hard:todo),pick=[],cap=(ls.get('gshort')!=='0')?2400:(pg?6000:3500);let n=0;
+ const pg=(ls.get('gall')==='1')||(ls.get('gscope')||'page')==='page';
+ const arr=pg?todo:(hard.length?hard:todo),pick=[],cap=(ls.get('gall')==='1')?1e9:((ls.get('gshort')!=='0')?2400:(pg?6000:3500));let n=0;
  for(const k of arr){const l=paras[k].length;if(pick.length&&n+l>cap)break;pick.push(k);n+=l}
- return {idx:pick,hard:!pg&&!!hard.length};
+ return {idx:pick,hard:!pg&&!!hard.length,all:arr.slice(),rest:arr.length-pick.length};
 }
 let lastLinks=null,lastPrompt='';
 async function copyText(t){
@@ -1944,6 +1957,7 @@ $('#bGpt').onclick=async()=>{
  if(!book||!paras.length){toast('আগে একটা বই খুলুন');return}
  const g=await nextGroup();
  if(!g){toast('✅ এই পাতার সব অংশ ChatGPT-র অনুবাদে আছে');return}
+ if(g.rest>0&&g.rest<=3&&!g.hard&&ls.get('gall')!=='1'){const nAll=g.idx.length+g.rest;if(confirm('এই পাতার '+nAll+'টি অনুচ্ছেদের মধ্যে '+g.idx.length+'টি এই রাউন্ডে যাচ্ছে, শেষের '+g.rest+'টি বাকি থাকবে।\n\nসব '+nAll+'টি একবারেই পাঠাবেন?\n(সবসময় একবারে চাইলে সেটিংসে "📄 ChatGPT-তে একবারে পুরো পাতা" টিক দিন)')){g.idx=g.all.slice();g.rest=0}}
  const txt0=chatPrompt(g.idx);
  gptJob={snap:paras.slice(),idx:g.idx.slice(),flat:chatFlat,pos:pos,key:key,plain:ls.get('gplain')!=='0'};
  const go=async txt=>{
@@ -1951,7 +1965,7 @@ $('#bGpt').onclick=async()=>{
  const pre=openChat(txt,ls.get('gmode')||'web');
  if(!copied)showPromptBox(txt);
  gbar(true);
- toast((g.hard?'⭐ কঠিন '+g.idx.length+'টি অংশ। ':'')+(pre?'ChatGPT খুলছে, প্রম্পট বসানো থাকবে। না থাকলে পেস্ট করুন।':(copied?'প্রম্পট কপি হয়েছে (লম্বা বলে আগে থেকে বসানো যায়নি)। ChatGPT না খুললে ওপরের 📱/🌐 বোতাম চাপুন, তারপর বার্তার ঘরে চেপে ধরে Paste করে পাঠান।':'অটো কপি হয়নি, নিচের ঘরে ম্যানুয়ালি করুন।')),6000);
+ toast((g.hard?'⭐ কঠিন '+g.idx.length+'টি অংশ। ':'')+(g.rest>0?'বাকি '+g.rest+'টি অনুচ্ছেদ পরের রাউন্ডে (উত্তর পেস্টের পর 💬 আবার চাপুন)। ':'')+(pre?'ChatGPT খুলছে, প্রম্পট বসানো থাকবে। না থাকলে পেস্ট করুন।':(copied?'প্রম্পট কপি হয়েছে (লম্বা বলে আগে থেকে বসানো যায়নি)। ChatGPT না খুললে ওপরের 📱/🌐 বোতাম চাপুন, তারপর বার্তার ঘরে চেপে ধরে Paste করে পাঠান।':'অটো কপি হয়নি, নিচের ঘরে ম্যানুয়ালি করুন।')),6000);
  };
  if(ls.get('gedit')==='1')showPromptEdit(txt0,go);else await go(txt0);
 };
@@ -2130,7 +2144,7 @@ $('#bGl').onclick=()=>{
  +'<input class="gi" id="gcl" placeholder="নিজের ChatGPT চ্যাট লিংক (ঐচ্ছিক, খালি রাখলে নতুন চ্যাট)">'
  +'<select class="gi" id="gscope"><option value="page">ChatGPT-তে পাঠাবে: পুরো পাতা (ছোট ছোট অংশে)</option><option value="hard">ChatGPT-তে পাঠাবে: শুধু কঠিন অংশ</option></select>'
  +'<label style="display:block;margin:6px 0"><input type="checkbox" id="gsh"> ChatGPT-তে সংক্ষিপ্ত প্রম্পট পাঠান (শুধু ইংরেজি অংশ + অনুবাদের অনুরোধ। নিজের নির্দেশনা ChatGPT-র Custom Instructions-এ একবার বসিয়ে রাখুন। ডিফল্ট চালু)</label>'
- +'<input class="gi" id="custs" placeholder="ChatGPT-র জন্য ছোট নির্দেশনা (ইংরেজিতে, প্রম্পটের সঙ্গে যাবে)"><label style="display:block;margin:6px 0"><input type="checkbox" id="gplain"> ChatGPT-তে অনুচ্ছেদ-নম্বর ছাড়া, বইয়ের মতো সাধারণ অনুচ্ছেদ পাঠান (ChatGPT একই ক্রমে ফাঁকা লাইন দিয়ে অনুচ্ছেদ ফেরত দেবে। ডিফল্ট চালু)</label><label style="display:block;margin:6px 0"><input type="checkbox" id="gedit"> ChatGPT-তে পাঠানোর আগে প্রতিবার প্রম্পট দেখে সম্পাদনা করব</label><div style="margin-top:6px"><b>✏️ ChatGPT প্রম্পট টেমপ্লেট</b> (খালি থাকলে ডিফল্ট চলবে)</div><textarea class="gi" id="gtpl" rows="9" placeholder="খালি = ডিফল্ট প্রম্পট। নিচের বোতাম চেপে ডিফল্ট লেখাটা এনে বদলাতে পারেন।"></textarea><button id="gtplf">📝 ডিফল্ট প্রম্পট এখানে আনুন</button> <button id="gtplr">↩ ডিফল্টে ফেরান</button><div style="font-size:12px;color:var(--mut);margin:4px 0">বসানো যায় এমন চিহ্ন: {{COUNT}} অনুচ্ছেদ-সংখ্যা, {{STYLE}} বাংলার ধরন, {{SUBJECT}} বইয়ের বিষয়, {{INSTRUCTIONS}} ছোট নির্দেশনা, {{TECHNICAL}} পরিভাষার নিয়ম, {{GLOSSARY}} শব্দকোষের শব্দ, {{PROFILEASK}} প্রোফাইল চাওয়া, {{PARAGRAPHS}} অনুচ্ছেদগুলো। {{PARAGRAPHS}} না থাকলে অনুচ্ছেদ শেষে জুড়ে যায়। এই টেমপ্লেট শুধু নম্বর-ছাড়া পদ্ধতিতে কাজ করে।</div>'
+ +'<input class="gi" id="custs" placeholder="ChatGPT-র জন্য ছোট নির্দেশনা (ইংরেজিতে, প্রম্পটের সঙ্গে যাবে)"><label style="display:block;margin:6px 0"><input type="checkbox" id="gall"> 📄 ChatGPT-তে একবারে পুরো পাতা পাঠান (অংশ-অংশ না করে; লম্বা পাতায় প্রম্পট বড় হবে)</label><label style="display:block;margin:6px 0"><input type="checkbox" id="gplain"> ChatGPT-তে অনুচ্ছেদ-নম্বর ছাড়া, বইয়ের মতো সাধারণ অনুচ্ছেদ পাঠান (ChatGPT একই ক্রমে ফাঁকা লাইন দিয়ে অনুচ্ছেদ ফেরত দেবে। ডিফল্ট চালু)</label><label style="display:block;margin:6px 0"><input type="checkbox" id="gedit"> ChatGPT-তে পাঠানোর আগে প্রতিবার প্রম্পট দেখে সম্পাদনা করব</label><div style="margin-top:6px"><b>✏️ ChatGPT প্রম্পট টেমপ্লেট</b> (খালি থাকলে ডিফল্ট চলবে)</div><textarea class="gi" id="gtpl" rows="9" placeholder="খালি = ডিফল্ট প্রম্পট। নিচের বোতাম চেপে ডিফল্ট লেখাটা এনে বদলাতে পারেন।"></textarea><button id="gtplf">📝 ডিফল্ট প্রম্পট এখানে আনুন</button> <button id="gtplr">↩ ডিফল্টে ফেরান</button><div style="font-size:12px;color:var(--mut);margin:4px 0">বসানো যায় এমন চিহ্ন: {{COUNT}} অনুচ্ছেদ-সংখ্যা, {{STYLE}} বাংলার ধরন, {{SUBJECT}} বইয়ের বিষয়, {{INSTRUCTIONS}} ছোট নির্দেশনা, {{TECHNICAL}} পরিভাষার নিয়ম, {{GLOSSARY}} শব্দকোষের শব্দ, {{PROFILEASK}} প্রোফাইল চাওয়া, {{PARAGRAPHS}} অনুচ্ছেদগুলো। {{PARAGRAPHS}} না থাকলে অনুচ্ছেদ শেষে জুড়ে যায়। এই টেমপ্লেট শুধু নম্বর-ছাড়া পদ্ধতিতে কাজ করে।</div>'
  +'<div id="bp" style="margin:6px 0;font-size:15px;color:var(--mut)"></div>'
  +'<button class="p" id="gs">সেভ করুন</button> <button id="gc">বন্ধ করুন</button> <button id="gtest">🔌 Gemini পরীক্ষা</button> <button id="gpst">📥 ChatGPT-র উত্তর পেস্ট করুন</button> <button id="wzgo">🧭 সেটআপ গাইড</button> <button id="inst">📲 ইনস্টল পরীক্ষা</button> <button id="bpr">প্রোফাইল রিসেট</button> <button id="bpi">📥 AI-র শেখা টার্ম শব্দকোষে নিন</button> <button id="vbump">🔄 সব AI অনুবাদ নতুন করে</button> <button id="pgre">🔄 শুধু এই পাতা আবার</button><div id="gres" style="margin-top:6px"></div>';
  $('#gt').value=gl.map(g=>g.bn?g.en+' = '+g.bn:g.en).join('\n');
@@ -2195,6 +2209,7 @@ $('#bGl').onclick=()=>{
  $('#bpr').onclick=()=>{bookCtx={profile:'',terms:{}};glRe=null;if(key)kvSet('bc:'+key,bookCtx);bpShow();toast('প্রোফাইল রিসেট হয়েছে')};
  $('#glu').value=glu;$('#glauto2').checked=glAuto2;$('#glrev').checked=glRev;if($('#gplain')){
  $('#gplain').checked=ls.get('gplain')!=='0';$('#gplain').onchange=e=>ls.set('gplain',e.target.checked?'1':'0');
+ $('#gall').checked=ls.get('gall')==='1';$('#gall').onchange=e=>ls.set('gall',e.target.checked?'1':'0');
  $('#gedit').checked=ls.get('gedit')==='1';$('#gedit').onchange=e=>ls.set('gedit',e.target.checked?'1':'0');
  $('#gtpl').value=ls.get('gtpl')||'';$('#gtpl').oninput=e=>ls.set('gtpl',e.target.value);
  $('#gtplf').onclick=()=>{$('#gtpl').value=gptTplDefault();ls.set('gtpl',$('#gtpl').value)};
