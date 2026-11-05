@@ -690,7 +690,7 @@ function showLib(){
  const lr=(()=>{try{return JSON.parse(ls.get('lastread')||'{}')}catch(e){return{}}})();
  const sortMode=ls.get('shelfsort')||'recent';
  const l=lib().map((x,i)=>({x,i})).sort((a,b)=>sortMode==='recent'?((lr[b.x.k]||0)-(lr[a.x.k]||0)||a.i-b.i):(a.i-b.i)).map(o=>o.x);sheet.style.display='none';view.className='';
- view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ১১.৫)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
+ view.innerHTML='<div class="hello" style="margin-top:3vh">📚 আমার বইয়ের তাক (V5 · বিল্ড ১১.৮)<br>'+(l.length?'বইয়ে ট্যাপ করে পড়া চালিয়ে যান।':'এখনো কোনো বই নেই। ওপরে 📂 চেপে PDF, EPUB বা MOBI খুলুন, খোলা বই এখানে জমা থাকবে।')+'</div>';
  if(l.length>1){const sb=document.createElement('button');sb.id='shsort';sb.textContent=sortMode==='recent'?'↕ সর্বশেষ পড়া আগে ✓ (চাপলে যোগ করার ক্রম)':'↕ যোগ করার ক্রম (চাপলে সর্বশেষ পড়া আগে)';sb.style.cssText='margin:6px 0;font-size:13px';sb.onclick=()=>{ls.set('shelfsort',sortMode==='recent'?'added':'recent');showLib()};view.append(sb)}
  const grid=document.createElement('div');grid.className='shelf';view.append(grid);
  l.forEach(x=>{
@@ -1970,6 +1970,64 @@ $('#bGpt').onclick=async()=>{
  if(ls.get('gedit')==='1')showPromptEdit(txt0,go);else await go(txt0);
 };
 let preStop=false;
+// ===== v6.16: সব 🔒 পাতা AI-তে উন্নত করা =====
+let ugStop=false,ugRun=false;
+const ugCount=()=>pliGet().filter(x=>x.soft&&!ugHas(key,x.pos)).map(x=>x.pos).sort((a,b)=>a-b);
+async function upgradeSoftPages(){
+ const st=$('#ugst'),say=t=>{if(st)st.textContent=t};
+ if(ugRun){say('আগেই চলছে…');return}
+ if(!book||!gOn||!aiKey()){say('AI চালু নেই। 🧠 সেটিংসে AI চালু করে key দিন।');return}
+ ugRun=true;ugStop=false;
+ const k0=key,pages=ugCount();let done=0,skipped=0,fail=0,curTouched=false,why='';
+ try{
+  if(!pages.length){say('✓ উন্নত করার মতো 🔒 পাতা নেই।');return}
+  for(let n=0;n<pages.length;n++){
+   if(ugStop){why='⏹ থামানো হয়েছে।';break}
+   if(key!==k0){why='বই বদলেছে, থেমেছে।';break}
+   if(!llmOn()){why='⏸ AI-র কোটা বা সীমা এখন বন্ধ।';break}
+   const p=pages[n];
+   say('⏳ পাতা '+(p+1)+' ('+(n+1)+'/'+pages.length+') · উন্নত '+done);
+   const L=await pget('pl:'+k0+':'+p);
+   let ps=[];try{ps=await book.get(p)}catch(e){}
+   if(!L||!Array.isArray(L.p)||!ps.length||ps.length!==L.p.length||ps.some((t,i)=>hk(t)!==L.p[i])){ugMark(k0,p);skipped++;continue}
+   const pendAny=!!(L.pend&&L.pend.some(Boolean));
+   if(L.ai.some(Boolean)&&!pendAny){ugMark(k0,p);skipped++;continue}
+   const cand=[];
+   for(let i=0;i<ps.length;i++){
+    if(L.ai[i])continue;
+    const hh=hk(ps[i]);if((await pget('lk:'+hh))||(await pget('mp:'+hh))!=null)continue;
+    cand.push({i,s:hardScore(ps[i],'')});
+   }
+   const pick=pendAny?cand.filter(x=>L.pend[x.i]):(hy?hardSel(cand,hyPct):cand);
+   if(!pick.length){ugMark(k0,p);skipped++;continue}
+   let out=[];
+   try{out=await gemTr(pick.map(x=>ps[x.i]),3500,1,REF?pick.map(x=>h2t(L.h[x.i])):undefined)}
+   catch(e){if(!llmOn()){why='⏸ AI-র কোটা বা সীমা এখন বন্ধ।'}else{fail++;why='⚠ AI থেকে উত্তর আসেনি ('+String((e&&e.message)||e).slice(0,60)+')।'}break}
+   let got=0;
+   pick.forEach((x,j)=>{const v=out[j];if(v!=null&&String(v).trim()){L.h[x.i]=esc(v);L.ai[x.i]=true;if(L.pend)L.pend[x.i]=false;pset('au:'+hk(ps[x.i]),{h:esc(v),ai:true,gv:gver,at:Date.now()});got++}});
+   if(got){
+    const soft=!L.ai.some(Boolean)||!!(L.pend&&L.pend.some(Boolean));
+    L.soft=soft;L.at=Date.now();pset('pl:'+k0+':'+p,L);pliSetK(k0,p,L.auto,true,soft);
+    if(got===pick.length)ugMark(k0,p);
+    done++;if(p===pos)curTouched=true;
+   }else fail++;
+   await sleepMs(gp==='gemini'?4000:1500);
+  }
+ }finally{
+  ugRun=false;
+  say((why?why+' ':'')+'✅ '+done+'টি পাতা AI-তে উন্নত'+(skipped?' · '+skipped+'টির দরকার ছিল না':'')+(fail?' · '+fail+'টি হয়নি (পরে আবার চাপুন)':'')+(why&&/কোটা|থামানো/.test(why)?' · বাকিটা পরে আবার চাপলে চলবে':''));
+  const nn=$('#ugn');if(nn)nn.textContent='🔒 পাতা যেগুলো উন্নত করা যাবে: '+ugCount().length+'টি';
+  try{markBM()}catch(e){}
+  if(curTouched&&book&&key===k0){try{await show();translateAll()}catch(e){}}
+ }
+}
+function ugUi(){
+ const box=document.createElement('div');box.style.cssText='margin-top:14px;padding-top:10px;border-top:1px solid var(--bd)';
+ box.innerHTML='<b>🔒→🔐 AI দিয়ে উন্নত করুন</b><div style="font-size:13px;color:var(--mut);margin:4px 0;line-height:1.6">এই বইয়ের যেসব পাতা Google-এ লক হয়ে আছে (🔒, ✨ নেই) সেগুলোর কঠিন অংশ AI-তে পাঠিয়ে উন্নত করে আবার লক করে। প্রতি পাতায় একবার। কোটা শেষ হলে থামে, পরে আবার চাপলে বাকি থেকে চলে। অ্যাপ খোলা ও স্ক্রিন চালু রাখুন।</div><div id="ugn"></div><div style="margin-top:6px"><button class="p" id="ugo">▶ শুরু করুন</button> <button id="ugs">⏹ থামান</button></div><div id="ugst" style="font-size:13px;margin-top:6px;line-height:1.6"></div>';
+ out.append(box);
+ $('#ugn').textContent='🔒 পাতা যেগুলো উন্নত করা যাবে: '+ugCount().length+'টি';
+ $('#ugo').onclick=upgradeSoftPages;$('#ugs').onclick=()=>{ugStop=true};
+}
 $('#bOff').onclick=()=>{
  sheet.style.display='flex';
  out.innerHTML='<div>ইন্টারনেট থাকতে এটা চালান। পুরো বই আগে থেকে অনুবাদ হয়ে ফোনে জমা থাকবে, পরে ইন্টারনেট ছাড়াই পড়তে পারবেন। শুরু করে এই প্যানেল বন্ধ করে নিশ্চিন্তে বই পড়তে পারেন, কাজ পেছনে চলবে, ওপরের ছোট লাইনে অগ্রগতি দেখাবে। স্ক্রিন বন্ধ না হতে দেওয়ার চেষ্টা করা হয়, কিন্তু অন্য অ্যাপে চলে গেলে ফোন কাজ থামিয়ে দিতে পারে। থামালে বা কোটা শেষ হলে পরে ⬇ চাপলে শেষবার যেখানে থেমেছিল সেখান থেকে এগোবে।</div><div style="margin-top:8px">শুরুর পাতা: <input class="gi" id="pfrom" type="number" min="1" style="width:100px;display:inline-block"> থেকে শেষ পর্যন্ত (ডিফল্ট: শেষবার যেখানে থেমেছিল, না থাকলে আপনি এখন যে পাতায়)</div><div style="margin-top:8px"><select class="gi" id="lkm"><option value="two">🅲 দুই-স্তর: পাতা-লক (Google/শব্দকোষ হলেও) + AI-অনুচ্ছেদ পাকা-লক (প্রস্তাবিত)</option><option value="ai">লক-নিয়ম 🅰 AI-ই চূড়ান্ত: শুধু AI-র অনুবাদ লক হয়, Google/শব্দকোষের অংশ খোলা থাকে</option><option value="all">লক-নিয়ম 🅱 সব লক: Google হলেও লক হয় (আগের নিয়ম)</option></select></div><button class="p" id="ps" style="margin-top:8px">⬇ শুরু করুন</button> <button id="pt">থামান</button><div id="pp" style="margin-top:8px"></div>';
@@ -1977,7 +2035,7 @@ $('#bOff').onclick=()=>{
   $('#pfrom').parentElement.insertAdjacentHTML('beforeend','<div style="font-size:13px;color:var(--mut);margin-top:4px">'+(pp0?'আগেরবার পাতা '+pp0+' পর্যন্ত অনুবাদ হয়ে লক হয়েছে, তাই পাতা '+(pp0+1)+' থেকে চলবে। বর্তমান পাতা (পাতা '+(pos+1)+') থেকে চাইলে <a href="#" id="pcur">এখানে চাপুন</a>।':'')+'</div>');
   const ac=$('#pcur');if(ac)ac.onclick=e=>{e.preventDefault();$('#pfrom').value=pos+1}}
  {const sel=$('#lkm');if(sel){sel.value=LKM;sel.onchange=()=>{LKM=sel.value;ls.set('lkm',LKM);toast(LKM==='ai'?'নিয়ম: 🅰 AI-ই চূড়ান্ত':LKM==='two'?'নিয়ম: 🅲 দুই-স্তর লক':'নিয়ম: 🅱 সব লক',2500)}}}
- $('#ps').onclick=preRun;$('#pt').onclick=()=>{preStop=true};
+ $('#ps').onclick=preRun;$('#pt').onclick=()=>{preStop=true};ugUi();
 };
 let wl=null,preBusy=false;
 async function wlOn(){try{if(navigator.wakeLock&&!wl){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null})}}catch(e){}}
@@ -2122,7 +2180,7 @@ $('#bGl').onclick=()=>{
 +'<button id="lmz">আজকের গণনা শূন্য করুন</button><div id="lmm" style="font-size:13px;margin-top:4px"></div>'
 +'<div style="margin-top:10px"><b>📖 বইয়ের ধরন (এক ক্লিকে নির্দেশনা বদল)</b><br><span style="font-size:13px;color:var(--mut)">বাছলে নিচের "অনুবাদের নির্দেশনা" ও বইয়ের বিষয় বদলে যায়। বইটা ওই ধরনে মনে রাখা হয়, আবার খুললে নিজে থেকে ফিরে আসে।</span></div><select class="gi" id="bpsel"></select><button id="bpsave">💾 বর্তমান নির্দেশনা নতুন ধরন হিসেবে সেভ</button> <button id="bpdel">🗑 নিজের ধরন মুছুন</button>'
 +'<div style="margin-top:10px"><b>🧠 অনুবাদের মান</b></div><label style="display:block;margin:4px 0"><input type="checkbox" id="vfy"> অনুবাদ শেষে AI দিয়ে মূলের সঙ্গে মিলিয়ে দেখা (বেশি কোটা লাগে; সমস্যা পেলে অনুচ্ছেদ লক হয় না, মেনুতে সংশোধন পাবেন)</label><label style="display:block;margin:4px 0"><input type="checkbox" id="recut"> AI-তে কিছু বাদ পড়লে (যেমন উপমা) সেই অনুচ্ছেদ নিজে থেকে একবার আবার পাঠান (সামান্য কোটা লাগে)</label><select class="gi" id="wmap"><option value="4">ট্যাপে ইংরেজি দেখানোর জোড়া: কম (কোটা সাশ্রয়)</option><option value="8">ট্যাপে ইংরেজি দেখানোর জোড়া: মাঝারি</option><option value="20">ট্যাপে ইংরেজি দেখানোর জোড়া: বেশি (আগের মতো, কোটা বেশি লাগে)</option></select>'
-+'<div style="margin-top:10px"><b>🔒 লক-নিয়ম</b><br><span style="font-size:13px;color:var(--mut)">🅰 AI-ই চূড়ান্ত: AI যা অনুবাদ করে সেটাই চূড়ান্ত হয়ে লক হয় (আগামী পাতা বা অফলাইন ডাউনলোড যেখানেই হোক), আর আপডেট লাগে না। Google ও শব্দকোষের অনুবাদ খোলা থাকে, AI কাজ না করা পর্যন্ত। 🅱 সব লক: Google হলেও লক। 🅲 দুই-স্তর: পাতা নম্বরের পাশের 🔒 মানে পাতাটা Google/শব্দকোষ দিয়ে লক (অস্থায়ী), 🔐 মানে সব AI-পাকা। AI-র অনুচ্ছেদ স্থায়ী লক, বাকি অংশ AI পাওয়া মাত্র নিজে উন্নত হয়।</span></div><select class="gi" id="lkm"><option value="two">🅲 দুই-স্তর: পাতা-লক (Google/শব্দকোষ হলেও) + AI-অনুচ্ছেদ পাকা-লক (প্রস্তাবিত)</option><option value="ai">🅰 AI-ই চূড়ান্ত (প্রস্তাবিত)</option><option value="all">🅱 সব লক (আগের নিয়ম)</option></select>'
++'<div style="margin-top:10px"><b>🔒 লক-নিয়ম</b><br><span style="font-size:13px;color:var(--mut)">🅰 AI-ই চূড়ান্ত: AI যা অনুবাদ করে সেটাই চূড়ান্ত হয়ে লক হয় (আগামী পাতা বা অফলাইন ডাউনলোড যেখানেই হোক), আর আপডেট লাগে না। Google ও শব্দকোষের অনুবাদ খোলা থাকে, AI কাজ না করা পর্যন্ত। 🅱 সব লক: Google হলেও লক। 🅲 দুই-স্তর: পাতা নম্বরের পাশের 🔒 মানে পাতাটা Google/শব্দকোষ দিয়ে লক (অস্থায়ী), 🔐 মানে AI-র কাজ শেষ (AI-র অংশে ✨; মিশ্র পদ্ধতিতে সহজ অংশ ইচ্ছে করে Google থাকে)। ✨ ছাড়া পাতা কখনো 🔐 হয় না। AI-র অনুচ্ছেদ স্থায়ী লক, বাকি অংশ AI পাওয়া মাত্র নিজে উন্নত হয়।</span></div><select class="gi" id="lkm"><option value="two">🅲 দুই-স্তর: পাতা-লক (Google/শব্দকোষ হলেও) + AI-অনুচ্ছেদ পাকা-লক (প্রস্তাবিত)</option><option value="ai">🅰 AI-ই চূড়ান্ত (প্রস্তাবিত)</option><option value="all">🅱 সব লক (আগের নিয়ম)</option></select>'
 +'<div style="margin-top:10px"><b>🔍 স্ক্যান করা বই (OCR)</b><br><span style="font-size:13px;color:var(--mut)">PDF-এ লেখা না থাকলে (ছবির পাতা) অ্যাপ নিজে পাতা পড়ে নেয়, তারপর আগের মতো Google + শব্দকোষে আগে অনুবাদ হয়। আর বাকি কঠিন অংশে AI ঠিক করে, তাই AI কোটা কম লাগে। প্রতিটি পাতার পড়া লেখা জমা থাকে, দ্বিতীয়বার লাগে না। প্রথমবার ভাষার ডেটা ইন্টারনেট থেকে নামে।</span></div>'
 +'<label style="display:block;margin:4px 0"><input type="checkbox" id="ocron"> ছবির পাতায় OCR চালু</label>'
 +'<select class="gi" id="ocrl"><option value="eng">বইয়ের ভাষা: ইংরেজি</option><option value="hin">বইয়ের ভাষা: হিন্দি</option><option value="eng+hin">বইয়ের ভাষা: ইংরেজি + হিন্দি মেশানো (ধীর)</option></select>'
@@ -3129,11 +3187,14 @@ async function lockPageNow(auto){
   t.querySelectorAll('[data-base]').forEach(s=>{s.textContent=s.dataset.base;delete s.dataset.open});
   h.push(t.innerHTML);ai.push(b.querySelector('.tr').classList.contains('ai'));
  }
- const okAi=blks.map(b=>b.querySelector('.tr').classList.contains('ai')&&b.dataset.vf!=='bad'),pend=blks.map((b,k)=>b.dataset.noau==='1'&&!okAi[k]),soft=LKM==='two'&&okAi.some(x=>!x);
+ const okAi=blks.map(b=>b.querySelector('.tr').classList.contains('ai')&&b.dataset.vf!=='bad'),pend=blks.map((b,k)=>b.dataset.noau==='1'&&!okAi[k]),soft=LKM==='two'&&(pend.some(Boolean)||!okAi.some(Boolean));
  pset('pl:'+key+':'+pos,{p,h,ai,pend,soft,auto:!!auto,gv:gver,at:Date.now()});
  pliSetK(key,pos,auto,true,soft);markBM();
  return true;
 }
+const ugGet=k=>{try{return JSON.parse(ls.get('ug:'+k)||'[]')}catch(e){return[]}};
+const ugHas=(k,p)=>ugGet(k).includes(p);
+const ugMark=(k,p)=>{const a=ugGet(k);if(!a.includes(p)){a.push(p);ls.set('ug:'+k,JSON.stringify(a))}};
 async function applyPageLock(blks){
  if(!pliGet().some(x=>x.pos===pos))return false;
  const stale=()=>{plDelete(key,pos);markBM();return false};
@@ -3143,6 +3204,23 @@ async function applyPageLock(blks){
  if(L.h.some(x=>/MYMEMORY WARNING/i.test(String(x))))return stale();
  for(let i=0;i<blks.length;i++)if(hk(blks[i].querySelector('.o').textContent)!==L.p[i])return stale();
  blks.forEach((b,i)=>{const d=b.querySelector('.tr');d.innerHTML=L.h[i];d.classList.toggle('ai',!!L.ai[i]);if(L.pend&&L.pend[i])b.dataset.noau='1';fin(d,b)});
+ if(LKM==='two'){
+  const anyAI=blks.some((b,i)=>!!L.ai[i]),pendAny=!!(L.pend&&L.pend.some(Boolean));
+  if(!anyAI&&gOn&&aiKey()&&!ugHas(key,pos)){
+   const cand=[];
+   for(let i=0;i<blks.length;i++){
+    if(L.ai[i]||(L.pend&&L.pend[i]))continue;
+    const tx=blks[i].querySelector('.o').textContent,hh=hk(tx);
+    if((await pget('lk:'+hh))||(await pget('mp:'+hh))!=null)continue;
+    cand.push({b:blks[i],s:hardScore(tx,'')});
+   }
+   const pick=hy?hardSel(cand,hyPct):cand;
+   if(!pick.length)ugMark(key,pos);else pick.forEach(x=>{x.b.dataset.noau='1'});
+  }
+  const soft2=!anyAI||pendAny,li=pliGet().find(x=>x.pos===pos);
+  if(li&&!!li.soft!==soft2)pliSetK(key,pos,li.auto,true,soft2);
+  markBM();
+ }
  return true;
 }
 async function refreshPageLock(){const li=pliGet().find(x=>x.pos===pos);if(li)await lockPageNow(false)}
@@ -3168,7 +3246,7 @@ async function autoLockAhead(k0,p,ps,hs,pendIdx){
  if(H.some(x=>!x))return;
  if(LKM==='ai'&&!A.every(x=>x))return;
  for(let i=0;i<ps.length;i++){const hh=P[i];if((A[i]||!aiFinal())&&await pget('au:'+hh)==null&&!(await pget('lk:'+hh))&&await pget('mp:'+hh)==null)pset('au:'+hh,{h:H[i],ai:A[i],gv:gver,at:Date.now()})}
- const soft=LKM==='two'&&!A.every(x=>x);
+ const soft=LKM==='two'&&(!!(pendIdx&&pendIdx.size)||!A.some(x=>x));
  pset('pl:'+k0+':'+p,{p:P,h:H,ai:A,pend:P.map((_,i)=>!!(pendIdx&&pendIdx.has(i))),soft,auto:true,gv:gver,at:Date.now()});pliSetK(k0,p,true,true,soft);
 }
 async function lockRange(from,to,prog){
@@ -3356,7 +3434,7 @@ async function upgradePend(){
   if(blks.length===1)ctxNow=await ctxFor(blks[0].querySelector('.o').textContent);
   const out=await gemTr(blks.map(b=>b.querySelector('.o').textContent),3500,0,REF?blks.map(b=>{try{return curText(b)}catch(e){return ''}}):undefined);ctxNow=null;
   if(pos===p0&&key===k0){
-   blks.forEach((b,k)=>{if(out[k]!=null){applyAI(b,out[k]);b.dataset.noau='';try{b.dataset.sy=conflictsFor(b.querySelector('.o').textContent,curText(b)).length?'1':''}catch(e){}}});
+   blks.forEach((b,k)=>{if(out[k]!=null){applyAI(b,out[k]);b.dataset.noau='';try{b.dataset.sy=conflictsFor(b.querySelector('.o').textContent,curText(b)).length?'1':''}catch(e){}}});ugMark(k0,p0);
    await lockParas([...view.querySelectorAll('.blk')]);
    if(isPageLocked())await lockPageNow(!!(pliGet().find(x=>x.pos===pos)||{}).auto);
    markBM();setSt('✓ AI দিয়ে উন্নত করা হয়েছে'+(blks.some(b=>b.dataset.noau==='1')?' (কিছু অংশ বাকি)':''));
